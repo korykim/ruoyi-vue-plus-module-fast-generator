@@ -9,7 +9,30 @@
     <resource-bundle>messages.MyBundle</resource-bundle>
 
     <extensions defaultExtensionNs="com.intellij">
-        <toolWindow factoryClass="com.github.korykim.ruoyivueplusmodulefastgenerator.toolWindow.MyToolWindowFactory" id="MyToolWindow"/>
-        <postStartupActivity implementation="com.github.korykim.ruoyivueplusmodulefastgenerator.startup.MyProjectActivity" />
+        <!-- 依赖配置设置页 -->
+        <applicationConfigurable
+                parentId="tools"
+                instance="com.github.korykim.ruoyivueplusmodulefastgenerator.ui.DependencyConfigSettings"
+                id="org.jetbrains.plugins.template.ui.DependencyConfigSettings"
+                displayName="Ruoyi-Vue-plus Module Dependency Configuration"/>
+
+        <!-- 通知组 -->
+        <notificationGroup id="Module Generator Notification" displayType="BALLOON" />
     </extensions>
+
+    <actions>
+        <!-- 添加生成模块操作 -->
+        <action id="RuoYi.GenerateModule"
+                class="com.github.korykim.ruoyivueplusmodulefastgenerator.actions.GenerateModuleAction"
+                text="Generate Ruoyi-Vue-plus Module"
+                description="Generate a new Ruoyi-Vue-plus module">
+            <override-text place="MainMenu" text="message('action.generate.module.text')"/>
+            <override-text place="ProjectViewPopupMenu" text="message('action.generate.module.text')"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="alt Q"/>
+            <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta alt Q"/>
+            <keyboard-shortcut keymap="Mac OS X 10.5+" first-keystroke="meta alt Q"/>
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+            <add-to-group group-id="MainMenu" anchor="last"/>
+        </action>
+    </actions>
 </idea-plugin>

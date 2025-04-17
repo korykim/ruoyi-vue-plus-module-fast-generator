@@ -1,6 +1,8 @@
 import org.jetbrains.changelog.Changelog
 import org.jetbrains.changelog.markdownToHTML
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
+import java.io.File
+import java.util.Properties
 
 plugins {
     id("java") // Java support
@@ -17,6 +19,21 @@ version = providers.gradleProperty("pluginVersion").get()
 // Set the JVM language level used to build the project.
 kotlin {
     jvmToolchain(21)
+}
+
+// 确定系统类型的VM选项文件
+val vmOptionsFile: File by lazy {
+    val osName = System.getProperty("os.name").lowercase()
+    val configDir = project.file(".intellijPlatform/config")
+
+    when {
+        osName.contains("windows") -> project.file("${configDir}/idea64.win.vmoptions")
+        osName.contains("mac") -> project.file("${configDir}/idea64.mac.vmoptions")
+        else -> project.file("${configDir}/idea64.vmoptions")
+    }.let { specificFile ->
+        // 如果特定系统的文件存在则使用，否则使用默认文件
+        if (specificFile.exists()) specificFile else project.file("${configDir}/idea64.vmoptions")
+    }
 }
 
 // Configure project's dependencies
@@ -44,8 +61,12 @@ dependencies {
         // Plugin Dependencies. Uses `platformPlugins` property from the gradle.properties file for plugin from JetBrains Marketplace.
         plugins(providers.gradleProperty("platformPlugins").map { it.split(',') })
 
+        // 添加必要的内置插件
+        bundledPlugins(listOf("org.jetbrains.idea.maven", "com.intellij.java"))
+
         testFramework(TestFrameworkType.Platform)
     }
+    implementation(kotlin("stdlib-jdk8"))
 }
 
 // Configure IntelliJ Platform Gradle Plugin - read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin-extension.html
@@ -132,10 +153,32 @@ tasks {
     publishPlugin {
         dependsOn(patchChangelog)
     }
+
+    // 为默认的runIde任务添加VM选项
+    named("runIde") {
+        doFirst {
+            (this as JavaExec).jvmArgs(
+                "-Djb.vmOptionsFile=${vmOptionsFile.absolutePath}",
+                "-Didea.properties.file=${project.file("idea.properties").absolutePath}"
+            )
+        }
+    }
 }
 
 intellijPlatformTesting {
     runIde {
+        // 为默认的runIde任务配置单独的任务
+        register("runIdeCustom") {
+            task {
+                jvmArgumentProviders += CommandLineArgumentProvider {
+                    listOf(
+                        "-Djb.vmOptionsFile=${vmOptionsFile.absolutePath}",
+                        "-Didea.properties.file=${project.file("idea.properties").absolutePath}"
+                    )
+                }
+            }
+        }
+
         register("runIdeForUiTests") {
             task {
                 jvmArgumentProviders += CommandLineArgumentProvider {
@@ -144,6 +187,7 @@ intellijPlatformTesting {
                         "-Dide.mac.message.dialogs.as.sheets=false",
                         "-Djb.privacy.policy.text=<!--999.999-->",
                         "-Djb.consents.confirmation.enabled=false",
+                        "-Djb.vmOptionsFile=${vmOptionsFile.absolutePath}"
                     )
                 }
             }
