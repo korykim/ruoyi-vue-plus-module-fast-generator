@@ -27,7 +27,7 @@ data class DependencyConfig(
     storages = [Storage("ModuleDependencyConfigs.xml")]
 )
 class DependencyConfigService : PersistentStateComponent<DependencyConfigService> {
-    // 依赖配置列表
+    // 依赖配置列表 - 使用公共变量以支持序列化
     private var dependencyConfigs: MutableList<DependencyConfig> = mutableListOf()
 
     init {
@@ -190,7 +190,7 @@ class DependencyConfigService : PersistentStateComponent<DependencyConfigService
      * 获取配置名称列表（已排序）
      */
     fun getConfigNames(): List<String> {
-        return dependencyConfigs.sortedBy { it.order }.map { it.name }
+        return getSortedConfigs().map { it.name }
     }
 
     /**
@@ -198,6 +198,13 @@ class DependencyConfigService : PersistentStateComponent<DependencyConfigService
      */
     fun getDependenciesContent(configName: String): String {
         return dependencyConfigs.find { it.name == configName }?.dependencies ?: ""
+    }
+
+    /**
+     * 获取排序后的配置列表
+     */
+    private fun getSortedConfigs(): List<DependencyConfig> {
+        return dependencyConfigs.sortedBy { it.order }
     }
 
     /**
@@ -223,7 +230,9 @@ class DependencyConfigService : PersistentStateComponent<DependencyConfigService
      * 对配置进行排序
      */
     private fun sortConfigs() {
-        dependencyConfigs.sortBy { it.order }
+        val sorted = dependencyConfigs.sortedBy { it.order }
+        dependencyConfigs.clear()
+        dependencyConfigs.addAll(sorted)
     }
 
     companion object {
