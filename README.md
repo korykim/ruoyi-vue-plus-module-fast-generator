@@ -1,51 +1,128 @@
-# ruoyi-vue-plus-module-fast-generator
+# RuoYi-Vue-Plus Module Fast Generator
 
 ![Build](https://github.com/korykim/ruoyi-vue-plus-module-fast-generator/workflows/Build/badge.svg)
 [![Version](https://img.shields.io/jetbrains/plugin/v/MARKETPLACE_ID.svg)](https://plugins.jetbrains.com/plugin/MARKETPLACE_ID)
 [![Downloads](https://img.shields.io/jetbrains/plugin/d/MARKETPLACE_ID.svg)](https://plugins.jetbrains.com/plugin/MARKETPLACE_ID)
 
-## Template ToDo list
-- [x] Create a new [IntelliJ Platform Plugin Template][template] project.
-- [ ] Get familiar with the [template documentation][template].
-- [ ] Adjust the [pluginGroup](./gradle.properties) and [pluginName](./gradle.properties), as well as the [id](./src/main/resources/META-INF/plugin.xml) and [sources package](./src/main/kotlin).
-- [ ] Adjust the plugin description in `README` (see [Tips][docs:plugin-description])
-- [ ] Review the [Legal Agreements](https://plugins.jetbrains.com/docs/marketplace/legal-agreements.html?from=IJPluginTemplate).
-- [ ] [Publish a plugin manually](https://plugins.jetbrains.com/docs/intellij/publishing-plugin.html?from=IJPluginTemplate) for the first time.
-- [ ] Set the `MARKETPLACE_ID` in the above README badges. You can obtain it once the plugin is published to JetBrains Marketplace.
-- [ ] Set the [Plugin Signing](https://plugins.jetbrains.com/docs/intellij/plugin-signing.html?from=IJPluginTemplate) related [secrets](https://github.com/JetBrains/intellij-platform-plugin-template#environment-variables).
-- [ ] Set the [Deployment Token](https://plugins.jetbrains.com/docs/marketplace/plugin-upload.html?from=IJPluginTemplate).
-- [ ] Click the <kbd>Watch</kbd> button on the top of the [IntelliJ Platform Plugin Template][template] to be notified about releases containing new features and fixes.
+## Introduction
 
-<!-- Plugin description -->
-This Fancy IntelliJ Platform Plugin is going to be your implementation of the brilliant ideas that you have.
+RuoYi-Vue-Plus Module Fast Generator is an IntelliJ IDEA plugin designed to streamline the creation of new modules in [RuoYi-Vue-Plus](https://github.com/dromara/RuoYi-Vue-Plus) projects. It automates the tedious process of manually creating module structures, updating POM files, and configuring project dependencies.
 
-This specific section is a source for the [plugin.xml](/src/main/resources/META-INF/plugin.xml) file which will be extracted by the [Gradle](/build.gradle.kts) during the build process.
+This plugin helps developers to:
+- Create new modules with standardized structure in seconds
+- Automatically update all necessary POM files
+- Configure dependencies based on predefined templates
+- Refresh and import Maven projects seamlessly
 
-To keep everything working, do not remove `<!-- ... -->` sections. 
-<!-- Plugin description end -->
+## Features
+
+- **One-click Module Generation**: Create complete module structures with a simple dialog
+- **Smart Module Detection**: Handles existing modules gracefully without conflicts
+- **Flexible Dependency Configuration**: Choose from predefined dependency templates or use defaults
+- **Automatic POM Updates**: Updates root POM, modules POM, and admin POM automatically
+- **Project Refresh**: Ensures all changes are properly recognized by Maven
+- **Package Structure Creation**: Generates standard package structure (controller, service, mapper, etc.)
 
 ## Installation
 
-- Using the IDE built-in plugin system:
+- **Using IDE built-in plugin system**:
   
-  <kbd>Settings/Preferences</kbd> > <kbd>Plugins</kbd> > <kbd>Marketplace</kbd> > <kbd>Search for "ruoyi-vue-plus-module-fast-generator"</kbd> >
+  <kbd>Settings/Preferences</kbd> > <kbd>Plugins</kbd> > <kbd>Marketplace</kbd> > <kbd>Search for "RuoYi-Vue-Plus Module Fast Generator"</kbd> >
   <kbd>Install</kbd>
   
-- Using JetBrains Marketplace:
-
-  Go to [JetBrains Marketplace](https://plugins.jetbrains.com/plugin/MARKETPLACE_ID) and install it by clicking the <kbd>Install to ...</kbd> button in case your IDE is running.
-
-  You can also download the [latest release](https://plugins.jetbrains.com/plugin/MARKETPLACE_ID/versions) from JetBrains Marketplace and install it manually using
-  <kbd>Settings/Preferences</kbd> > <kbd>Plugins</kbd> > <kbd>⚙️</kbd> > <kbd>Install plugin from disk...</kbd>
-
-- Manually:
+- **Manual Installation**:
 
   Download the [latest release](https://github.com/korykim/ruoyi-vue-plus-module-fast-generator/releases/latest) and install it manually using
   <kbd>Settings/Preferences</kbd> > <kbd>Plugins</kbd> > <kbd>⚙️</kbd> > <kbd>Install plugin from disk...</kbd>
 
+## Usage
+
+1. Open your RuoYi-Vue-Plus project in IntelliJ IDEA
+2. Navigate to <kbd>Tools</kbd> > <kbd>Generate RuoYi Module</kbd> (or use shortcut if configured)
+3. Enter the module name (prefix will be added automatically if not included)
+4. Select dependency configuration template (optional)
+5. Click <kbd>OK</kbd>
+6. The plugin will create the module and update all necessary files
+7. Maven will automatically import the new module
+
+## Requirements
+
+- IntelliJ IDEA 2022.1+
+- Java 11+
+- Maven 3.6+
+- RuoYi-Vue-Plus project
+
+## Contributing
+
+Contributions are welcome! If you'd like to contribute, please:
+1. Fork the repository
+2. Create a feature branch
+3. Submit a pull request
+
+## License
+
+This project is licensed under the Apache License 2.0.
 
 ---
-Plugin based on the [IntelliJ Platform Plugin Template][template].
 
-[template]: https://github.com/JetBrains/intellij-platform-plugin-template
-[docs:plugin-description]: https://plugins.jetbrains.com/docs/intellij/plugin-user-experience.html#plugin-description-and-presentation
+# RuoYi-Vue-Plus 模块快速生成器
+
+## 简介
+
+RuoYi-Vue-Plus 模块快速生成器是一个 IntelliJ IDEA 插件，专为简化 [RuoYi-Vue-Plus](https://github.com/dromara/RuoYi-Vue-Plus) 项目中新模块的创建而设计。它自动化了手动创建模块结构、更新 POM 文件和配置项目依赖的繁琐过程。
+
+这个插件可以帮助开发者：
+- 几秒钟内创建具有标准结构的新模块
+- 自动更新所有必要的 POM 文件
+- 基于预定义模板配置依赖
+- 无缝刷新和导入 Maven 项目
+
+## 功能特点
+
+- **一键模块生成**：通过简单对话框创建完整的模块结构
+- **智能模块检测**：优雅处理已存在的模块，避免冲突
+- **灵活的依赖配置**：可以选择预定义的依赖模板或使用默认值
+- **自动 POM 更新**：自动更新根 POM、modules POM 和 admin POM
+- **项目刷新**：确保 Maven 正确识别所有更改
+- **包结构创建**：生成标准包结构（controller、service、mapper等）
+
+## 安装方法
+
+- **使用 IDE 内置插件系统**：
+  
+  <kbd>设置/首选项</kbd> > <kbd>插件</kbd> > <kbd>市场</kbd> > <kbd>搜索 "RuoYi-Vue-Plus Module Fast Generator"</kbd> >
+  <kbd>安装</kbd>
+  
+- **手动安装**：
+
+  下载[最新版本](https://github.com/korykim/ruoyi-vue-plus-module-fast-generator/releases/latest)并手动安装：
+  <kbd>设置/首选项</kbd> > <kbd>插件</kbd> > <kbd>⚙️</kbd> > <kbd>从磁盘安装插件...</kbd>
+
+## 使用方法
+
+1. 在 IntelliJ IDEA 中打开你的 RuoYi-Vue-Plus 项目
+2. 导航至 <kbd>工具</kbd> > <kbd>生成 RuoYi 模块</kbd>（或使用快捷键，如已配置）
+3. 输入模块名称（如果未包含前缀，将自动添加）
+4. 选择依赖配置模板（可选）
+5. 点击 <kbd>确定</kbd>
+6. 插件将创建模块并更新所有必要文件
+7. Maven 将自动导入新模块
+
+## 系统要求
+
+- IntelliJ IDEA 2022.1+
+- Java 11+
+- Maven 3.6+
+- RuoYi-Vue-Plus 项目
+
+## 参与贡献
+
+欢迎贡献！如果您想贡献，请：
+1. Fork 仓库
+2. 创建功能分支
+3. 提交 Pull Request
+
+## 许可证
+
+本项目采用 Apache License 2.0 许可证。
+
