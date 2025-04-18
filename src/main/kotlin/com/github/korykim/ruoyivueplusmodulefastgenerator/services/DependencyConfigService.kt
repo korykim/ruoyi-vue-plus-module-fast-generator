@@ -29,6 +29,9 @@ data class DependencyConfig(
 class DependencyConfigService : PersistentStateComponent<DependencyConfigService> {
     // 依赖配置列表 - 使用公共变量以支持序列化
     private var dependencyConfigs: MutableList<DependencyConfig> = mutableListOf()
+    
+    // 模块前缀配置，默认为 "ruoyi-"
+    var modulePrefix: String = "ruoyi-"
 
     init {
         // 初始化默认配置如果是空的

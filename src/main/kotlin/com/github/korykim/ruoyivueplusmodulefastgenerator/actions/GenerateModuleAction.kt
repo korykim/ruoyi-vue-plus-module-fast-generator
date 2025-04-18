@@ -44,9 +44,12 @@ class GenerateModuleAction : AnAction(), DumbAware {
                 // 获取选定的依赖配置
                 val configName = dialog.getSelectedConfigName()
                 
+                // 获取模块前缀
+                val modulePrefix = dialog.getModulePrefix()
+                
                 // 调用服务生成模块
                 val moduleGeneratorService = project.service<ModuleGeneratorService>()
-                val success = moduleGeneratorService.generateModule(moduleName, configName)
+                val success = moduleGeneratorService.generateModule(moduleName, configName, modulePrefix)
                 
                 if (success) {
                     showNotification(project, MyBundle.message("module.generate.success", moduleName), NotificationType.INFORMATION)

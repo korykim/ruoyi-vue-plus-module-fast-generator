@@ -18,11 +18,15 @@ import javax.swing.SwingUtilities
  */
 class ModuleNameInputDialog(project: Project) : DialogWrapper(project) {
     private val moduleNameField = JBTextField(20)
+    private val modulePrefixField = JBTextField(10)
     private val dependencyConfigComboBox = ComboBox<String>()
     private val configService = DependencyConfigService.getInstance()
     
     init {
         title = MyBundle.message("dialog.title.generate.module")
+        
+        // 初始化前缀字段
+        modulePrefixField.text = configService.modulePrefix
         
         // 加载依赖配置
         refreshConfigComboBox()
@@ -39,6 +43,7 @@ class ModuleNameInputDialog(project: Project) : DialogWrapper(project) {
 
     override fun createCenterPanel(): JComponent {
         val formPanel = FormBuilder.createFormBuilder()
+            .addLabeledComponent(MyBundle.message("dialog.field.module.prefix"), modulePrefixField)
             .addLabeledComponent(MyBundle.message("dialog.field.module.name"), moduleNameField)
             .addLabeledComponent(MyBundle.message("dialog.field.dependency.config"), dependencyConfigComboBox)
             .panel
@@ -73,7 +78,18 @@ class ModuleNameInputDialog(project: Project) : DialogWrapper(project) {
     fun getModuleName(): String = moduleNameField.text
     
     /**
+     * 获取模块前缀
+     */
+    fun getModulePrefix(): String = modulePrefixField.text
+    
+    /**
      * 获取选择的依赖配置名称
      */
     fun getSelectedConfigName(): String? = dependencyConfigComboBox.selectedItem as? String
+    
+    override fun doOKAction() {
+        // 保存用户设置的前缀
+        configService.modulePrefix = modulePrefixField.text
+        super.doOKAction()
+    }
 } 

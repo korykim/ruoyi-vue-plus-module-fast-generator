@@ -29,12 +29,13 @@ class ModuleGeneratorService(private val project: Project) {
      *
      * @param moduleName 模块名称，格式如 "ruoyi-xxx"
      * @param dependencyConfigName 依赖配置名称，用于获取自定义依赖内容
+     * @param modulePrefix 模块前缀，默认为 null（使用配置服务中的前缀）
      * @return 操作是否成功
      */
-    fun generateModule(moduleName: String, dependencyConfigName: String? = null): Boolean {
+    fun generateModule(moduleName: String, dependencyConfigName: String? = null, modulePrefix: String? = null): Boolean {
         try {
             // 检查模块名称格式
-            val normalizedModuleName = normalizeModuleName(moduleName)
+            val normalizedModuleName = normalizeModuleName(moduleName, modulePrefix)
             
             // 1. 修改根目录 pom.xml
             updateRootPom(normalizedModuleName)
@@ -63,12 +64,17 @@ class ModuleGeneratorService(private val project: Project) {
     }
     
     /**
-     * 标准化模块名称，确保格式为 "ruoyi-xxx"
+     * 标准化模块名称，确保格式为 "[prefix]xxx"
+     * 
+     * @param moduleName 用户输入的模块名称
+     * @param modulePrefix 模块前缀，如果为null则使用配置服务中的默认前缀
+     * @return 标准化后的模块名称
      */
-    private fun normalizeModuleName(moduleName: String): String {
+    private fun normalizeModuleName(moduleName: String, modulePrefix: String? = null): String {
+        val prefix = modulePrefix ?: DependencyConfigService.getInstance().modulePrefix
         var name = moduleName.trim()
-        if (!name.startsWith("ruoyi-")) {
-            name = "ruoyi-$name"
+        if (!name.startsWith(prefix)) {
+            name = "$prefix$name"
         }
         return name
     }
