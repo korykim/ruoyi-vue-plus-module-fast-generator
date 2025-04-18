@@ -3,6 +3,36 @@
     <id>com.github.korykim.ruoyivueplusmodulefastgenerator</id>
     <name>ruoyi-vue-plus-module-fast-generator</name>
     <vendor>korykim</vendor>
+    
+    <description><![CDATA[
+        <h1>RuoYi-Vue-Plus Module Fast Generator</h1>
+        <p>一键生成若依Vue Plus框架的模块，提高开发效率。</p>
+        <p>One-click generation of RuoYi-Vue-Plus framework modules to improve development efficiency.</p>
+        
+        <h2>主要功能 / Main Features</h2>
+        <ul>
+            <li>一键创建模块结构，包含标准包和POM文件 / Create module structure with standard packages and POM files in one click</li>
+            <li>自动更新根POM、模块POM和Admin POM文件 / Automatically update root POM, modules POM, and admin POM files</li>
+            <li>自定义依赖配置，提供基础和完整两种默认模板 / Custom dependency configurations with basic and full templates</li>
+            <li>可配置模块名称前缀 / Configurable module name prefix</li>
+            <li>自动刷新和导入Maven项目 / Automatic refresh and import of Maven projects</li>
+        </ul>
+        
+        <h2>使用方法 / Usage</h2>
+        <ol>
+            <li>工具菜单或右键菜单选择"Generate Ruoyi-Vue-plus Module"（快捷键Alt+Q）/ Select "Generate Ruoyi-Vue-plus Module" from Tools menu or context menu (shortcut: Alt+Q)</li>
+            <li>输入模块名称，选择依赖配置 / Enter module name and select dependency configuration</li>
+            <li>点击确定，等待生成完成 / Click OK and wait for generation to complete</li>
+        </ol>
+        
+        <h2>配置设置 / Configuration</h2>
+        <p>在Settings/Preferences → Tools → Ruoyi-Vue-plus Module Dependency Configuration中可以管理依赖配置模板。</p>
+        <p>Manage dependency configuration templates in Settings/Preferences → Tools → Ruoyi-Vue-plus Module Dependency Configuration.</p>
+        
+        <h2>适用项目 / Applicable Projects</h2>
+        <p>专为<a href="https://github.com/dromara/RuoYi-Vue-Plus">若依Vue Plus微服务项目</a>设计，简化模块创建流程。</p>
+        <p>Designed for <a href="https://github.com/dromara/RuoYi-Vue-Plus">RuoYi-Vue-Plus microservice projects</a> to simplify the module creation process.</p>
+    ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
 

@@ -4,6 +4,7 @@
 [![Version](https://img.shields.io/jetbrains/plugin/v/MARKETPLACE_ID.svg)](https://plugins.jetbrains.com/plugin/MARKETPLACE_ID)
 [![Downloads](https://img.shields.io/jetbrains/plugin/d/MARKETPLACE_ID.svg)](https://plugins.jetbrains.com/plugin/MARKETPLACE_ID)
 
+<!-- Plugin description -->
 ## Introduction
 
 RuoYi-Vue-Plus Module Fast Generator is an IntelliJ IDEA plugin designed to streamline the creation of new modules in [RuoYi-Vue-Plus](https://github.com/dromara/RuoYi-Vue-Plus) projects. It automates the tedious process of manually creating module structures, updating POM files, and configuring project dependencies.
@@ -23,17 +24,13 @@ This plugin helps developers to:
 - **Project Refresh**: Ensures all changes are properly recognized by Maven
 - **Package Structure Creation**: Generates standard package structure (controller, service, mapper, etc.)
 
+
 ## Installation
 
 - **Using IDE built-in plugin system**:
   
   <kbd>Settings/Preferences</kbd> > <kbd>Plugins</kbd> > <kbd>Marketplace</kbd> > <kbd>Search for "RuoYi-Vue-Plus Module Fast Generator"</kbd> >
   <kbd>Install</kbd>
-  
-- **Manual Installation**:
-
-  Download the [latest release](https://github.com/korykim/ruoyi-vue-plus-module-fast-generator/releases/latest) and install it manually using
-  <kbd>Settings/Preferences</kbd> > <kbd>Plugins</kbd> > <kbd>⚙️</kbd> > <kbd>Install plugin from disk...</kbd>
 
 ## Usage
 
@@ -93,11 +90,6 @@ RuoYi-Vue-Plus 模块快速生成器是一个 IntelliJ IDEA 插件，专为简�
   <kbd>设置/首选项</kbd> > <kbd>插件</kbd> > <kbd>市场</kbd> > <kbd>搜索 "RuoYi-Vue-Plus Module Fast Generator"</kbd> >
   <kbd>安装</kbd>
   
-- **手动安装**：
-
-  下载[最新版本](https://github.com/korykim/ruoyi-vue-plus-module-fast-generator/releases/latest)并手动安装：
-  <kbd>设置/首选项</kbd> > <kbd>插件</kbd> > <kbd>⚙️</kbd> > <kbd>从磁盘安装插件...</kbd>
-
 ## 使用方法
 
 1. 在 IntelliJ IDEA 中打开你的 RuoYi-Vue-Plus 项目
@@ -107,6 +99,8 @@ RuoYi-Vue-Plus 模块快速生成器是一个 IntelliJ IDEA 插件，专为简�
 5. 点击 <kbd>确定</kbd>
 6. 插件将创建模块并更新所有必要文件
 7. Maven 将自动导入新模块
+
+<!-- Plugin description end -->
 
 ## 系统要求
 
