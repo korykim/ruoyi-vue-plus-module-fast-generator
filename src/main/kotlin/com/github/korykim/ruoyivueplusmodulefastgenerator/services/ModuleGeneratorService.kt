@@ -27,16 +27,138 @@ class ModuleGeneratorService(private val project: Project) {
     private val logger = logger<ModuleGeneratorService>()
     
     /**
+     * 验证项目结构是否符合RuoYi-Vue-Plus项目结构
+     * 
+     * @return 包含验证结果和描述信息的Pair
+     */
+    private fun validateProjectStructure(): Pair<Boolean, String> {
+        val basePath = project.basePath ?: return Pair(false, "无法获取项目路径")
+        
+        // 获取当前配置的模块前缀
+        val prefix = DependencyConfigService.getInstance().modulePrefix.trimEnd('-')
+        
+        // 检查pom.xml是否存在
+        val rootPomExists = findFileInProject("pom.xml") != null
+        if (!rootPomExists) {
+            return Pair(false, "未找到根目录pom.xml文件，当前项目可能不是Maven项目")
+        }
+        
+        // 检查modules目录是否存在
+        val modulesDir = findFileInProject("$prefix-modules")
+        if (modulesDir == null || !modulesDir.isDirectory) {
+            // 尝试寻找可能的modules目录
+            val possibleModulesDirs = findPossibleModulesDirs()
+            if (possibleModulesDirs.isNotEmpty()) {
+                logger.info("未找到$prefix-modules目录，但发现了可能的替代目录: ${possibleModulesDirs.joinToString()}")
+                // 如果找到了可能的modules目录，则更新前缀配置
+                val firstDir = possibleModulesDirs.first()
+                if (firstDir.endsWith("-modules")) {
+                    val newPrefix = firstDir.substringBefore("-modules") + "-"
+                    DependencyConfigService.getInstance().modulePrefix = newPrefix
+                    logger.info("自动更新模块前缀为: $newPrefix")
+                    return validateProjectStructure() // 重新验证
+                }
+            }
+            return Pair(false, "未找到$prefix-modules目录，当前项目可能不是RuoYi-Vue-Plus项目")
+        }
+        
+        // 检查modules/pom.xml是否存在
+        val modulesPomExists = findFileInProject("$prefix-modules/pom.xml") != null
+        if (!modulesPomExists) {
+            return Pair(false, "未找到$prefix-modules/pom.xml文件，模块管理可能不完整")
+        }
+        
+        // 检查admin目录是否存在 - 可能是prefix-admin或ruoyi-admin
+        val adminExists = findFileInProject("$prefix-admin") != null || findFileInProject("ruoyi-admin") != null
+        
+        // 如果找不到admin目录，尝试查找其他可能的admin目录
+        if (!adminExists) {
+            val possibleAdminDirs = findPossibleAdminDirs()
+            if (possibleAdminDirs.isNotEmpty()) {
+                logger.info("未找到$prefix-admin目录，但发现了可能的替代目录: ${possibleAdminDirs.joinToString()}")
+                return Pair(true, "找到可能的admin目录: ${possibleAdminDirs.first()}")
+            }
+            return Pair(false, "未找到$prefix-admin或ruoyi-admin目录，当前项目可能不是标准的RuoYi-Vue-Plus项目")
+        }
+        
+        return Pair(true, "项目结构验证通过")
+    }
+    
+    /**
+     * 查找可能的modules目录
+     */
+    private fun findPossibleModulesDirs(): List<String> {
+        val basePath = project.basePath ?: return emptyList()
+        
+        val baseDir = LocalFileSystem.getInstance().findFileByPath(basePath) ?: return emptyList()
+        val possibleDirs = mutableListOf<String>()
+        
+        // 查找项目根目录下所有以-modules结尾的目录
+        baseDir.children.forEach { child ->
+            if (child.isDirectory && child.name.endsWith("-modules")) {
+                possibleDirs.add(child.name)
+            }
+        }
+        
+        return possibleDirs
+    }
+    
+    /**
+     * 查找可能的admin目录
+     */
+    private fun findPossibleAdminDirs(): List<String> {
+        val basePath = project.basePath ?: return emptyList()
+        
+        val baseDir = LocalFileSystem.getInstance().findFileByPath(basePath) ?: return emptyList()
+        val possibleDirs = mutableListOf<String>()
+        
+        // 查找项目根目录下所有以-admin结尾的目录
+        baseDir.children.forEach { child ->
+            if (child.isDirectory && child.name.endsWith("-admin")) {
+                possibleDirs.add(child.name)
+            }
+        }
+        
+        return possibleDirs
+    }
+    
+    /**
      * 生成新模块
      *
-     * @param moduleName 模块名称，格式如 "ruoyi-xxx"
-     * @param dependencyConfigName 依赖配置名称，用于获取自定义依赖内容
-     * @param modulePrefix 模块前缀，默认为 null（使用配置服务中的前缀）
+     * @param moduleName 模块名称
+     * @param dependencyConfigName 依赖配置名称，如果为null则使用默认依赖
+     * @param modulePrefix 模块前缀，如果为null则使用配置服务中的默认前缀
      * @return 操作是否成功
      */
     fun generateModule(moduleName: String, dependencyConfigName: String? = null, modulePrefix: String? = null): Boolean {
         try {
-            // 检查模块名称格式
+            if (moduleName.isBlank()) {
+                throw IllegalArgumentException("模块名称不能为空")
+            }
+            
+            // 验证项目结构
+            val (isValid, message) = validateProjectStructure()
+            if (!isValid) {
+                logger.warn("项目结构验证失败: $message")
+                // 继续执行，不中断流程，但记录警告
+            }
+            
+            // 获取项目信息，并更新依赖配置
+            val groupId = findProjectGroupId()
+            val currentPrefix = DependencyConfigService.getInstance().modulePrefix
+            
+            // 自动更新依赖配置中的groupId和前缀
+            if (groupId != "org.dromara" || !currentPrefix.startsWith("ruoyi-")) {
+                try {
+                    DependencyConfigService.getInstance().updateDependenciesInfo(groupId, currentPrefix)
+                    logger.info("已更新依赖配置信息, groupId: $groupId, 前缀: $currentPrefix")
+                } catch (e: Exception) {
+                    logger.error("更新依赖配置信息失败: ${e.message}", e)
+                    // 继续执行，不中断流程
+                }
+            }
+            
+            // 标准化模块名称（确保格式为ruoyi-xxx）
             val normalizedModuleName = normalizeModuleName(moduleName, modulePrefix)
             
             logger.info("开始生成模块: $normalizedModuleName")
@@ -50,13 +172,28 @@ class ModuleGeneratorService(private val project: Project) {
             }
             
             // 1. 修改根目录 pom.xml
-            updateRootPom(normalizedModuleName)
+            try {
+                updateRootPom(normalizedModuleName)
+            } catch (e: Exception) {
+                logger.error("更新根目录pom.xml失败: ${e.message}", e)
+                // 继续执行，不中断流程
+            }
             
             // 2. 修改 ruoyi-modules/pom.xml
-            updateModulesPom(normalizedModuleName)
+            try {
+                updateModulesPom(normalizedModuleName)
+            } catch (e: Exception) {
+                logger.error("更新modules/pom.xml失败: ${e.message}", e)
+                // 继续执行，不中断流程
+            }
             
             // 3. 修改 ruoyi-admin/pom.xml
-            updateAdminPom(normalizedModuleName)
+            try {
+                updateAdminPom(normalizedModuleName)
+            } catch (e: Exception) {
+                logger.error("更新admin/pom.xml失败: ${e.message}", e)
+                // 继续执行，不中断流程
+            }
             
             // 4. 创建新模块目录和文件（或重用现有目录）
             val moduleDir = createModuleStructure(normalizedModuleName, dependencyConfigName)
@@ -98,14 +235,51 @@ class ModuleGeneratorService(private val project: Project) {
     }
     
     /**
+     * 查找项目组ID
+     */
+    private fun findProjectGroupId(): String {
+        val rootPomFile = findFileInProject("pom.xml") ?: return "org.dromara" // 默认值
+        
+        val psiFile = PsiManager.getInstance(project).findFile(rootPomFile) as? XmlFile
+            ?: return "org.dromara" // 无法解析时使用默认值
+            
+        val rootTag = psiFile.rootTag ?: return "org.dromara" // 无法找到根元素时使用默认值
+        
+        // 直接读取<groupId>标签
+        val groupIdTag = rootTag.findFirstSubTag("groupId")
+        if (groupIdTag != null) {
+            return groupIdTag.value.text
+        }
+        
+        // 如果没有直接的groupId标签，尝试读取<parent>下的<groupId>标签
+        val parentTag = rootTag.findFirstSubTag("parent")
+        if (parentTag != null) {
+            val parentGroupIdTag = parentTag.findFirstSubTag("groupId")
+            if (parentGroupIdTag != null) {
+                return parentGroupIdTag.value.text
+            }
+        }
+        
+        // 如果都没找到，返回一个默认值
+        return "org.dromara"
+    }
+    
+    /**
      * 更新根目录 pom.xml 文件
      */
     private fun updateRootPom(moduleName: String) {
-        val rootPomFile = findFileInProject("pom.xml") ?: throw Exception("根目录 pom.xml 文件未找到")
+        val rootPomFile = findFileInProject("pom.xml")
+        if (rootPomFile == null) {
+            logger.warn("根目录 pom.xml 文件未找到，跳过更新根依赖")
+            return // 文件不存在时直接返回，不抛出异常
+        }
         
         val psiFile = PsiManager.getInstance(project).findFile(rootPomFile) as? XmlFile
             ?: throw Exception("无法解析 pom.xml 文件")
             
+        // 获取项目groupId
+        val groupId = findProjectGroupId()
+        
         WriteCommandAction.runWriteCommandAction(project, "Add Dependency to Root Pom.xml", null, {
             try {
                 // 查找 <dependencyManagement> 元素
@@ -126,7 +300,7 @@ class ModuleGeneratorService(private val project: Project) {
                     // 创建新的依赖元素
                     val dependencyXml = """
                         <dependency>
-                            <groupId>org.dromara</groupId>
+                            <groupId>$groupId</groupId>
                             <artifactId>$moduleName</artifactId>
                             <version>${"$"}{revision}</version>
                         </dependency>
@@ -156,8 +330,11 @@ class ModuleGeneratorService(private val project: Project) {
         val prefix = DependencyConfigService.getInstance().modulePrefix.trimEnd('-')
         
         val modulesPomFile = findFileInProject("$prefix-modules/pom.xml")
-            ?: throw Exception("$prefix-modules/pom.xml 文件未找到")
-            
+        if (modulesPomFile == null) {
+            logger.warn("$prefix-modules/pom.xml 文件未找到，跳过更新modules依赖")
+            return // 文件不存在时直接返回，不抛出异常
+        }
+        
         val psiFile = PsiManager.getInstance(project).findFile(modulesPomFile) as? XmlFile
             ?: throw Exception("无法解析 $prefix-modules/pom.xml 文件")
             
@@ -191,15 +368,52 @@ class ModuleGeneratorService(private val project: Project) {
     }
     
     /**
+     * 查找Admin目录名称
+     */
+    private fun findAdminDirName(): String {
+        val prefix = DependencyConfigService.getInstance().modulePrefix.trimEnd('-')
+        
+        // 优先查找与前缀匹配的admin目录
+        val prefixAdminDir = findFileInProject("$prefix-admin")
+        if (prefixAdminDir != null && prefixAdminDir.isDirectory) {
+            return "$prefix-admin"
+        }
+        
+        // 其次查找ruoyi-admin目录
+        val ruoyiAdminDir = findFileInProject("ruoyi-admin")
+        if (ruoyiAdminDir != null && ruoyiAdminDir.isDirectory) {
+            return "ruoyi-admin"
+        }
+        
+        // 最后查找任何以-admin结尾的目录
+        val possibleAdminDirs = findPossibleAdminDirs()
+        if (possibleAdminDirs.isNotEmpty()) {
+            return possibleAdminDirs.first()
+        }
+        
+        // 如果都找不到，返回默认值
+        return "$prefix-admin"
+    }
+    
+    /**
      * 更新 ruoyi-admin/pom.xml 文件
      */
     private fun updateAdminPom(moduleName: String) {
-        val adminPomFile = findFileInProject("ruoyi-admin/pom.xml")
-            ?: throw Exception("ruoyi-admin/pom.xml 文件未找到")
-            
+        // 尝试查找正确的admin目录
+        val adminDirName = findAdminDirName()
+        
+        val adminPomFile = findFileInProject("$adminDirName/pom.xml")
+        if (adminPomFile == null) {
+            logger.warn("$adminDirName/pom.xml 文件未找到，跳过更新admin依赖")
+            return // 文件不存在时直接返回，不抛出异常
+        }
+        
         val psiFile = PsiManager.getInstance(project).findFile(adminPomFile) as? XmlFile
-            ?: throw Exception("无法解析 ruoyi-admin/pom.xml 文件")
-            
+            ?: throw Exception("无法解析 $adminDirName/pom.xml 文件")
+        
+        // 获取项目groupId
+        val groupId = findProjectGroupId()
+        
         WriteCommandAction.runWriteCommandAction(project, "Add Dependency to Admin Pom.xml", null, {
             try {
                 val rootTag = psiFile.rootTag ?: throw Exception("无法找到 pom.xml 根元素")
@@ -217,11 +431,11 @@ class ModuleGeneratorService(private val project: Project) {
                     val version = findProjectVersion()
                     
                     // 创建新的依赖元素，显式包含版本号
-                    val simpleModuleName = moduleName.substringAfter("ruoyi-")
+                    val simpleModuleName = moduleName.substringAfter(DependencyConfigService.getInstance().modulePrefix.trimEnd('-') + "-")
                     val dependencyXml = """
                         <!-- ${simpleModuleName}模块  -->
                         <dependency>
-                            <groupId>org.dromara</groupId>
+                            <groupId>$groupId</groupId>
                             <artifactId>$moduleName</artifactId>
                             <version>$version</version>
                         </dependency>
@@ -231,12 +445,12 @@ class ModuleGeneratorService(private val project: Project) {
                     val newDependencyTag = factory.createTagFromText(dependencyXml, XMLLanguage.INSTANCE)
                     dependenciesTag.addSubTag(newDependencyTag, false)
                     
-                    logger.info("已添加模块 '$moduleName' 的依赖到 admin pom.xml")
+                    logger.info("已添加模块 '$moduleName' 的依赖到 $adminDirName/pom.xml")
                 } else {
-                    logger.info("模块 '$moduleName' 的依赖已存在于 admin pom.xml 中，无需重复添加")
+                    logger.info("模块 '$moduleName' 的依赖已存在于 $adminDirName/pom.xml 中，无需重复添加")
                 }
             } catch (e: Exception) {
-                logger.error("更新 admin pom.xml 失败", e)
+                logger.error("更新 $adminDirName/pom.xml 失败", e)
                 throw e
             }
         })
@@ -350,31 +564,32 @@ class ModuleGeneratorService(private val project: Project) {
                     mainDir.createChildDirectory(this, "resources")
                 }
                 
-                // 检查包结构是否已存在
-                val existingOrgDir = javaDir.findChild("org")
-                val orgDir = if (existingOrgDir != null && existingOrgDir.isDirectory) {
-                    existingOrgDir
-                } else {
-                    javaDir.createChildDirectory(this, "org")
+                // 获取项目的groupId，用于创建包结构
+                val groupId = findProjectGroupId()
+                val packageParts = groupId.split(".")
+                
+                // 从java目录开始创建包结构
+                var currentDir = javaDir
+                for (part in packageParts) {
+                    val existingPartDir = currentDir.findChild(part)
+                    currentDir = if (existingPartDir != null && existingPartDir.isDirectory) {
+                        existingPartDir
+                    } else {
+                        currentDir.createChildDirectory(this, part)
+                    }
                 }
                 
-                val existingDromaraDir = orgDir.findChild("dromara")
-                val dromaraDir = if (existingDromaraDir != null && existingDromaraDir.isDirectory) {
-                    existingDromaraDir
-                } else {
-                    orgDir.createChildDirectory(this, "dromara")
-                }
-                
+                // 使用模块名（去掉连字符）作为包名的最后一部分
                 val moduleNameWithoutDash = moduleName.replace("-", "")
-                val existingModuleNameDir = dromaraDir.findChild(moduleNameWithoutDash)
+                val existingModuleNameDir = currentDir.findChild(moduleNameWithoutDash)
                 val moduleNameDir = if (existingModuleNameDir != null && existingModuleNameDir.isDirectory) {
                     existingModuleNameDir
                 } else {
-                    dromaraDir.createChildDirectory(this, moduleNameWithoutDash)
+                    currentDir.createChildDirectory(this, moduleNameWithoutDash)
                 }
                 
                 // 创建基本包结构
-                createBasicPackages(moduleNameDir)
+                createStandardPackages(moduleNameDir)
                 
                 resultDir = newDir
             } catch (e: Exception) {
@@ -390,34 +605,68 @@ class ModuleGeneratorService(private val project: Project) {
      * 创建基本包结构
      */
     private fun createBasicPackages(baseDir: VirtualFile) {
+        // 获取项目groupId来确定包路径结构
+        val groupId = findProjectGroupId()
+        val packageParts = groupId.split(".")
+        
         WriteCommandAction.runWriteCommandAction(project, "Create Basic Packages", null, {
             try {
-                // 创建常用的包结构（先检查是否已存在）
-                if (baseDir.findChild("controller") == null) {
-                    baseDir.createChildDirectory(this, "controller")
-                }
-                if (baseDir.findChild("domain") == null) {
-                    baseDir.createChildDirectory(this, "domain")
-                }
-                if (baseDir.findChild("mapper") == null) {
-                    baseDir.createChildDirectory(this, "mapper")
-                }
-                
-                val existingServiceDir = baseDir.findChild("service")
-                val serviceDir = if (existingServiceDir != null && existingServiceDir.isDirectory) {
-                    existingServiceDir
+                // 当groupId不是org.dromara时，创建正确的包结构
+                if (groupId != "org.dromara") {
+                    var currentDir = baseDir
+                    for (i in 0 until (packageParts.size - 2)) { // 排除已经创建的org.dromara
+                        val partName = packageParts[i + 2] // 跳过前两个部分，因为org.dromara已经创建
+                        val existingDir = currentDir.findChild(partName)
+                        currentDir = if (existingDir != null && existingDir.isDirectory) {
+                            existingDir
+                        } else {
+                            currentDir.createChildDirectory(this, partName)
+                        }
+                    }
+                    
+                    // 设置基础包结构的父目录为最终的包目录
+                    createStandardPackages(currentDir)
                 } else {
-                    baseDir.createChildDirectory(this, "service")
-                }
-                
-                if (serviceDir.findChild("impl") == null) {
-                    serviceDir.createChildDirectory(this, "impl")
+                    // 如果是默认的org.dromara，使用原来的结构
+                    createStandardPackages(baseDir)
                 }
             } catch (e: Exception) {
                 logger.error("创建基本包结构失败", e)
                 throw e
             }
         })
+    }
+    
+    /**
+     * 创建标准的包结构
+     */
+    private fun createStandardPackages(baseDir: VirtualFile) {
+        try {
+            // 创建常用的包结构（先检查是否已存在）
+            if (baseDir.findChild("controller") == null) {
+                baseDir.createChildDirectory(this, "controller")
+            }
+            if (baseDir.findChild("domain") == null) {
+                baseDir.createChildDirectory(this, "domain")
+            }
+            if (baseDir.findChild("mapper") == null) {
+                baseDir.createChildDirectory(this, "mapper")
+            }
+            
+            val existingServiceDir = baseDir.findChild("service")
+            val serviceDir = if (existingServiceDir != null && existingServiceDir.isDirectory) {
+                existingServiceDir
+            } else {
+                baseDir.createChildDirectory(this, "service")
+            }
+            
+            if (serviceDir.findChild("impl") == null) {
+                serviceDir.createChildDirectory(this, "impl")
+            }
+        } catch (e: Exception) {
+            logger.error("创建标准包结构失败", e)
+            throw e
+        }
     }
     
     /**
@@ -428,7 +677,8 @@ class ModuleGeneratorService(private val project: Project) {
      * @return 生成的pom.xml内容
      */
     private fun generateModulePomContent(moduleName: String, dependencyConfigName: String? = null): String {
-        val simpleModuleName = moduleName.substringAfter("${DependencyConfigService.getInstance().modulePrefix.trimEnd('-')}-")
+        val prefix = DependencyConfigService.getInstance().modulePrefix.trimEnd('-')
+        val simpleModuleName = moduleName.substringAfter("$prefix-")
         
         // 获取项目版本号
         val version = try {
@@ -437,6 +687,9 @@ class ModuleGeneratorService(private val project: Project) {
             "${"\$"}{revision}" // 使用默认的表达式如果找不到版本号
         }
         
+        // 获取项目groupId
+        val groupId = findProjectGroupId()
+        
         // 获取依赖配置内容
         val dependenciesContent = if (dependencyConfigName != null) {
             DependencyConfigService.getInstance().getDependenciesContent(dependencyConfigName)
@@ -444,11 +697,8 @@ class ModuleGeneratorService(private val project: Project) {
             // 如果没有指定配置或者配置不存在，使用默认配置
             DependencyConfigService.getInstance().getConfigNames().firstOrNull()?.let {
                 DependencyConfigService.getInstance().getDependenciesContent(it)
-            } ?: DEFAULT_DEPENDENCIES
+            } ?: getDefaultDependencies(groupId, prefix)
         }
-        
-        // 获取当前配置的模块前缀，并移除结尾的连字符（如果有）
-        val prefix = DependencyConfigService.getInstance().modulePrefix.trimEnd('-')
         
         return """
 <?xml version="1.0" encoding="UTF-8"?>
@@ -457,7 +707,7 @@ class ModuleGeneratorService(private val project: Project) {
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
         <artifactId>${prefix}-modules</artifactId>
-        <groupId>org.dromara</groupId>
+        <groupId>$groupId</groupId>
         <version>$version</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
@@ -636,11 +886,18 @@ $dependenciesContent
      * 从根目录 pom.xml 中删除依赖
      */
     private fun removeFromRootPom(moduleName: String) {
-        val rootPomFile = findFileInProject("pom.xml") ?: throw Exception("根目录 pom.xml 文件未找到")
+        val rootPomFile = findFileInProject("pom.xml")
+        if (rootPomFile == null) {
+            logger.warn("根目录 pom.xml 文件未找到，跳过删除根依赖")
+            return // 文件不存在时直接返回，不抛出异常
+        }
         
         val psiFile = PsiManager.getInstance(project).findFile(rootPomFile) as? XmlFile
             ?: throw Exception("无法解析 pom.xml 文件")
             
+        // 获取项目groupId
+        val groupId = findProjectGroupId()
+        
         WriteCommandAction.runWriteCommandAction(project, "Remove Dependency from Root Pom.xml", null, {
             try {
                 // 查找 <dependencyManagement> 元素
@@ -651,10 +908,13 @@ $dependenciesContent
                 val dependenciesTag = dependencyManagementTag.findFirstSubTag("dependencies")
                     ?: throw Exception("在 dependencyManagement 中未找到 dependencies 标签")
                 
-                // 查找要删除的依赖
+                // 查找要删除的依赖，匹配groupId和artifactId
                 dependenciesTag.findSubTags("dependency").forEach { dependencyTag ->
                     val artifactIdTag = dependencyTag.findFirstSubTag("artifactId")
-                    if (artifactIdTag?.value?.text == moduleName) {
+                    val groupIdTag = dependencyTag.findFirstSubTag("groupId")
+                    
+                    if (artifactIdTag?.value?.text == moduleName && 
+                        (groupIdTag == null || groupIdTag.value?.text == groupId)) {
                         // 找到了对应的依赖，删除它
                         dependencyTag.delete()
                         logger.info("已从根 pom.xml 中删除模块 '$moduleName' 的依赖")
@@ -675,8 +935,11 @@ $dependenciesContent
         val prefix = DependencyConfigService.getInstance().modulePrefix.trimEnd('-')
         
         val modulesPomFile = findFileInProject("$prefix-modules/pom.xml")
-            ?: throw Exception("$prefix-modules/pom.xml 文件未找到")
-            
+        if (modulesPomFile == null) {
+            logger.warn("$prefix-modules/pom.xml 文件未找到，跳过删除modules模块")
+            return // 文件不存在时直接返回，不抛出异常
+        }
+        
         val psiFile = PsiManager.getInstance(project).findFile(modulesPomFile) as? XmlFile
             ?: throw Exception("无法解析 $prefix-modules/pom.xml 文件")
             
@@ -705,29 +968,41 @@ $dependenciesContent
      * 从 ruoyi-admin/pom.xml 中删除依赖
      */
     private fun removeFromAdminPom(moduleName: String) {
-        val adminPomFile = findFileInProject("ruoyi-admin/pom.xml")
-            ?: throw Exception("ruoyi-admin/pom.xml 文件未找到")
-            
+        // 尝试查找正确的admin目录
+        val adminDirName = findAdminDirName()
+        
+        val adminPomFile = findFileInProject("$adminDirName/pom.xml")
+        if (adminPomFile == null) {
+            logger.warn("$adminDirName/pom.xml 文件未找到，跳过删除admin依赖")
+            return // 文件不存在时直接返回，不抛出异常
+        }
+        
         val psiFile = PsiManager.getInstance(project).findFile(adminPomFile) as? XmlFile
-            ?: throw Exception("无法解析 ruoyi-admin/pom.xml 文件")
-            
+            ?: throw Exception("无法解析 $adminDirName/pom.xml 文件")
+        
+        // 获取项目groupId
+        val groupId = findProjectGroupId()
+        
         WriteCommandAction.runWriteCommandAction(project, "Remove Dependency from Admin Pom.xml", null, {
             try {
                 val rootTag = psiFile.rootTag ?: throw Exception("无法找到 pom.xml 根元素")
                 val dependenciesTag = rootTag.findFirstSubTag("dependencies")
                     ?: throw Exception("在 admin pom.xml 中未找到 dependencies 标签")
                 
-                // 查找要删除的依赖
+                // 查找要删除的依赖，匹配groupId和artifactId
                 dependenciesTag.findSubTags("dependency").forEach { dependencyTag ->
                     val artifactIdTag = dependencyTag.findFirstSubTag("artifactId")
-                    if (artifactIdTag?.value?.text == moduleName) {
+                    val groupIdTag = dependencyTag.findFirstSubTag("groupId")
+                    
+                    if (artifactIdTag?.value?.text == moduleName && 
+                        (groupIdTag == null || groupIdTag.value?.text == groupId)) {
                         // 找到了对应的依赖，删除它
                         dependencyTag.delete()
-                        logger.info("已从 admin pom.xml 中删除模块 '$moduleName' 的依赖")
+                        logger.info("已从 $adminDirName/pom.xml 中删除模块 '$moduleName' 的依赖")
                     }
                 }
             } catch (e: Exception) {
-                logger.error("从 admin pom.xml 中删除依赖失败", e)
+                logger.error("从 $adminDirName/pom.xml 中删除依赖失败", e)
                 throw e
             }
         })
@@ -830,95 +1105,97 @@ $dependenciesContent
         /**
          * 默认依赖内容，当没有配置或配置失效时使用
          */
-        private const val DEFAULT_DEPENDENCIES = """
+        fun getDefaultDependencies(groupId: String = "org.dromara", prefix: String = "ruoyi-"): String {
+            return """
  
-        <!-- 通用工具-->
-        <dependency>
-            <groupId>org.dromara</groupId>
-            <artifactId>ruoyi-common-core</artifactId>
-        </dependency>
+            <!-- 通用工具-->
+            <dependency>
+                <groupId>$groupId</groupId>
+                <artifactId>${prefix}common-core</artifactId>
+            </dependency>
 
-        <dependency>
-            <groupId>org.dromara</groupId>
-            <artifactId>ruoyi-common-doc</artifactId>
-        </dependency>
+            <dependency>
+                <groupId>$groupId</groupId>
+                <artifactId>${prefix}common-doc</artifactId>
+            </dependency>
 
-        <dependency>
-            <groupId>org.dromara</groupId>
-            <artifactId>ruoyi-common-sms</artifactId>
-        </dependency>
+            <dependency>
+                <groupId>$groupId</groupId>
+                <artifactId>${prefix}common-sms</artifactId>
+            </dependency>
 
-        <dependency>
-            <groupId>org.dromara</groupId>
-            <artifactId>ruoyi-common-mail</artifactId>
-        </dependency>
+            <dependency>
+                <groupId>$groupId</groupId>
+                <artifactId>${prefix}common-mail</artifactId>
+            </dependency>
 
-        <dependency>
-            <groupId>org.dromara</groupId>
-            <artifactId>ruoyi-common-redis</artifactId>
-        </dependency>
+            <dependency>
+                <groupId>$groupId</groupId>
+                <artifactId>${prefix}common-redis</artifactId>
+            </dependency>
 
-        <dependency>
-            <groupId>org.dromara</groupId>
-            <artifactId>ruoyi-common-idempotent</artifactId>
-        </dependency>
+            <dependency>
+                <groupId>$groupId</groupId>
+                <artifactId>${prefix}common-idempotent</artifactId>
+            </dependency>
 
-        <dependency>
-            <groupId>org.dromara</groupId>
-            <artifactId>ruoyi-common-mybatis</artifactId>
-        </dependency>
+            <dependency>
+                <groupId>$groupId</groupId>
+                <artifactId>${prefix}common-mybatis</artifactId>
+            </dependency>
 
-        <dependency>
-            <groupId>org.dromara</groupId>
-            <artifactId>ruoyi-common-log</artifactId>
-        </dependency>
+            <dependency>
+                <groupId>$groupId</groupId>
+                <artifactId>${prefix}common-log</artifactId>
+            </dependency>
 
-        <dependency>
-            <groupId>org.dromara</groupId>
-            <artifactId>ruoyi-common-excel</artifactId>
-        </dependency>
+            <dependency>
+                <groupId>$groupId</groupId>
+                <artifactId>${prefix}common-excel</artifactId>
+            </dependency>
 
-        <dependency>
-            <groupId>org.dromara</groupId>
-            <artifactId>ruoyi-common-security</artifactId>
-        </dependency>
+            <dependency>
+                <groupId>$groupId</groupId>
+                <artifactId>${prefix}common-security</artifactId>
+            </dependency>
 
-        <dependency>
-            <groupId>org.dromara</groupId>
-            <artifactId>ruoyi-common-web</artifactId>
-        </dependency>
+            <dependency>
+                <groupId>$groupId</groupId>
+                <artifactId>${prefix}common-web</artifactId>
+            </dependency>
 
-        <dependency>
-            <groupId>org.dromara</groupId>
-            <artifactId>ruoyi-common-ratelimiter</artifactId>
-        </dependency>
+            <dependency>
+                <groupId>$groupId</groupId>
+                <artifactId>${prefix}common-ratelimiter</artifactId>
+            </dependency>
 
-        <dependency>
-            <groupId>org.dromara</groupId>
-            <artifactId>ruoyi-common-translation</artifactId>
-        </dependency>
+            <dependency>
+                <groupId>$groupId</groupId>
+                <artifactId>${prefix}common-translation</artifactId>
+            </dependency>
 
-        <dependency>
-            <groupId>org.dromara</groupId>
-            <artifactId>ruoyi-common-sensitive</artifactId>
-        </dependency>
+            <dependency>
+                <groupId>$groupId</groupId>
+                <artifactId>${prefix}common-sensitive</artifactId>
+            </dependency>
 
-        <dependency>
-            <groupId>org.dromara</groupId>
-            <artifactId>ruoyi-common-encrypt</artifactId>
-        </dependency>
+            <dependency>
+                <groupId>$groupId</groupId>
+                <artifactId>${prefix}common-encrypt</artifactId>
+            </dependency>
 
-        <dependency>
-            <groupId>org.dromara</groupId>
-            <artifactId>ruoyi-common-tenant</artifactId>
-        </dependency>
+            <dependency>
+                <groupId>$groupId</groupId>
+                <artifactId>${prefix}common-tenant</artifactId>
+            </dependency>
 
-        <dependency>
-            <groupId>org.dromara</groupId>
-            <artifactId>ruoyi-common-websocket</artifactId>
-        </dependency>
+            <dependency>
+                <groupId>$groupId</groupId>
+                <artifactId>${prefix}common-websocket</artifactId>
+            </dependency>
  
-        """
+            """
+        }
     }
 }
 
