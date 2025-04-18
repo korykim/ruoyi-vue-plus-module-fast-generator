@@ -16,6 +16,7 @@
             <li>自定义依赖配置，提供基础和完整两种默认模板 / Custom dependency configurations with basic and full templates</li>
             <li>可配置模块名称前缀 / Configurable module name prefix</li>
             <li>自动刷新和导入Maven项目 / Automatic refresh and import of Maven projects</li>
+            <li>支持一键删除已生成的模块 / Support for one-click deletion of generated modules</li>
         </ul>
         
         <h2>使用方法 / Usage</h2>
@@ -23,6 +24,7 @@
             <li>工具菜单或右键菜单选择"Generate Ruoyi-Vue-plus Module"（快捷键Alt+Q）/ Select "Generate Ruoyi-Vue-plus Module" from Tools menu or context menu (shortcut: Alt+Q)</li>
             <li>输入模块名称，选择依赖配置 / Enter module name and select dependency configuration</li>
             <li>点击确定，等待生成完成 / Click OK and wait for generation to complete</li>
+            <li>要删除模块，在模块上右键点击选择"删除模块[模块名]"选项 / To delete a module, right-click on the module and select "Delete Module [module name]" option</li>
         </ol>
         
         <h2>配置设置 / Configuration</h2>
@@ -63,6 +65,15 @@
             <keyboard-shortcut keymap="Mac OS X 10.5+" first-keystroke="meta alt Q"/>
             <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
             <add-to-group group-id="MainMenu" anchor="last"/>
+        </action>
+        
+        <!-- 添加删除模块操作 -->
+        <action id="RuoYi.DeleteModule"
+                class="com.github.korykim.ruoyivueplusmodulefastgenerator.actions.DeleteModuleAction"
+                text="Delete Module"
+                description="Delete the generated module">
+            <!-- 注意：不需要覆盖文本，因为操作类会动态设置文本 -->
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
         </action>
     </actions>
 </idea-plugin>

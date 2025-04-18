@@ -13,6 +13,8 @@ import com.intellij.psi.xml.XmlFile
 import com.intellij.psi.XmlElementFactory
 import com.intellij.lang.xml.XMLLanguage
 import org.jetbrains.idea.maven.project.MavenProjectsManager
+import com.intellij.util.concurrency.AppExecutorUtil
+import java.util.concurrent.TimeUnit
 
 
 /**
@@ -67,6 +69,9 @@ class ModuleGeneratorService(private val project: Project) {
             
             // 7. 确保新模块的pom.xml被刷新和导入
             refreshAndImportModulePom(moduleDir)
+            
+            // 8. 延迟刷新确保Maven项目导入完成后UI更新
+            scheduleDelayedRefresh(project, normalizedModuleName)
             
             logger.info("模块 '$normalizedModuleName' " + (if (moduleExists) "更新" else "创建") + "成功")
             return true
@@ -147,11 +152,14 @@ class ModuleGeneratorService(private val project: Project) {
      * 更新 ruoyi-modules/pom.xml 文件
      */
     private fun updateModulesPom(moduleName: String) {
-        val modulesPomFile = findFileInProject("ruoyi-modules/pom.xml")
-            ?: throw Exception("ruoyi-modules/pom.xml 文件未找到")
+        // 获取当前配置的模块前缀，并移除结尾的连字符（如果有）
+        val prefix = DependencyConfigService.getInstance().modulePrefix.trimEnd('-')
+        
+        val modulesPomFile = findFileInProject("$prefix-modules/pom.xml")
+            ?: throw Exception("$prefix-modules/pom.xml 文件未找到")
             
         val psiFile = PsiManager.getInstance(project).findFile(modulesPomFile) as? XmlFile
-            ?: throw Exception("无法解析 ruoyi-modules/pom.xml 文件")
+            ?: throw Exception("无法解析 $prefix-modules/pom.xml 文件")
             
         WriteCommandAction.runWriteCommandAction(project, "Add Module to Modules Pom.xml", null, {
             try {
@@ -272,8 +280,11 @@ class ModuleGeneratorService(private val project: Project) {
      * @return 创建的模块目录
      */
     private fun createModuleStructure(moduleName: String, dependencyConfigName: String? = null): VirtualFile {
-        val modulesDir = findFileInProject("ruoyi-modules")
-            ?: throw Exception("ruoyi-modules 目录未找到")
+        // 获取当前配置的模块前缀，并移除结尾的连字符（如果有）
+        val prefix = DependencyConfigService.getInstance().modulePrefix.trimEnd('-')
+        
+        val modulesDir = findFileInProject("$prefix-modules")
+            ?: throw Exception("$prefix-modules 目录未找到")
         
         // 检查模块目录是否已存在
         val existingDir = modulesDir.findChild(moduleName)
@@ -417,7 +428,7 @@ class ModuleGeneratorService(private val project: Project) {
      * @return 生成的pom.xml内容
      */
     private fun generateModulePomContent(moduleName: String, dependencyConfigName: String? = null): String {
-        val simpleModuleName = moduleName.substringAfter("ruoyi-")
+        val simpleModuleName = moduleName.substringAfter("${DependencyConfigService.getInstance().modulePrefix.trimEnd('-')}-")
         
         // 获取项目版本号
         val version = try {
@@ -436,13 +447,16 @@ class ModuleGeneratorService(private val project: Project) {
             } ?: DEFAULT_DEPENDENCIES
         }
         
+        // 获取当前配置的模块前缀，并移除结尾的连字符（如果有）
+        val prefix = DependencyConfigService.getInstance().modulePrefix.trimEnd('-')
+        
         return """
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>ruoyi-modules</artifactId>
+        <artifactId>${prefix}-modules</artifactId>
         <groupId>org.dromara</groupId>
         <version>$version</version>
     </parent>
@@ -567,9 +581,249 @@ $dependenciesContent
      * 检查模块是否已存在
      */
     private fun isModuleExists(moduleName: String): Boolean {
-        val modulesDir = findFileInProject("ruoyi-modules") ?: return false
+        // 获取当前配置的模块前缀，并移除结尾的连字符（如果有）
+        val prefix = DependencyConfigService.getInstance().modulePrefix.trimEnd('-')
+        
+        // 构建模块目录路径
+        val modulesDir = findFileInProject("$prefix-modules") ?: return false
         val moduleDir = modulesDir.findChild(moduleName)
         return moduleDir != null && moduleDir.isDirectory
+    }
+    
+    /**
+     * 删除指定的模块
+     *
+     * @param moduleName 要删除的模块名称
+     * @return 操作是否成功
+     */
+    fun deleteModule(moduleName: String): Boolean {
+        try {
+            logger.info("开始删除模块: $moduleName")
+            
+            // 检查模块是否存在
+            if (!isModuleExists(moduleName)) {
+                logger.info("模块 '$moduleName' 不存在，无需删除")
+                return false
+            }
+            
+            // 1. 从根目录 pom.xml 中删除依赖
+            removeFromRootPom(moduleName)
+            
+            // 2. 从 ruoyi-modules/pom.xml 中删除模块
+            removeFromModulesPom(moduleName)
+            
+            // 3. 从 ruoyi-admin/pom.xml 中删除依赖
+            removeFromAdminPom(moduleName)
+            
+            // 4. 删除模块目录
+            deleteModuleDirectory(moduleName)
+            
+            // 5. 刷新项目视图
+            refreshProjectView()
+            
+            // 6. 显式触发Maven项目导入
+            importMavenChanges()
+            
+            logger.info("模块 '$moduleName' 删除成功")
+            return true
+        } catch (e: Exception) {
+            logger.error("删除模块失败: ${e.message}", e)
+            return false
+        }
+    }
+    
+    /**
+     * 从根目录 pom.xml 中删除依赖
+     */
+    private fun removeFromRootPom(moduleName: String) {
+        val rootPomFile = findFileInProject("pom.xml") ?: throw Exception("根目录 pom.xml 文件未找到")
+        
+        val psiFile = PsiManager.getInstance(project).findFile(rootPomFile) as? XmlFile
+            ?: throw Exception("无法解析 pom.xml 文件")
+            
+        WriteCommandAction.runWriteCommandAction(project, "Remove Dependency from Root Pom.xml", null, {
+            try {
+                // 查找 <dependencyManagement> 元素
+                val rootTag = psiFile.rootTag ?: throw Exception("无法找到 pom.xml 根元素")
+                val dependencyManagementTag = rootTag.findFirstSubTag("dependencyManagement")
+                    ?: throw Exception("在根 pom.xml 中未找到 dependencyManagement 标签")
+                    
+                val dependenciesTag = dependencyManagementTag.findFirstSubTag("dependencies")
+                    ?: throw Exception("在 dependencyManagement 中未找到 dependencies 标签")
+                
+                // 查找要删除的依赖
+                dependenciesTag.findSubTags("dependency").forEach { dependencyTag ->
+                    val artifactIdTag = dependencyTag.findFirstSubTag("artifactId")
+                    if (artifactIdTag?.value?.text == moduleName) {
+                        // 找到了对应的依赖，删除它
+                        dependencyTag.delete()
+                        logger.info("已从根 pom.xml 中删除模块 '$moduleName' 的依赖")
+                    }
+                }
+            } catch (e: Exception) {
+                logger.error("从根 pom.xml 中删除依赖失败", e)
+                throw e
+            }
+        })
+    }
+    
+    /**
+     * 从 ruoyi-modules/pom.xml 中删除模块
+     */
+    private fun removeFromModulesPom(moduleName: String) {
+        // 获取当前配置的模块前缀，并移除结尾的连字符（如果有）
+        val prefix = DependencyConfigService.getInstance().modulePrefix.trimEnd('-')
+        
+        val modulesPomFile = findFileInProject("$prefix-modules/pom.xml")
+            ?: throw Exception("$prefix-modules/pom.xml 文件未找到")
+            
+        val psiFile = PsiManager.getInstance(project).findFile(modulesPomFile) as? XmlFile
+            ?: throw Exception("无法解析 $prefix-modules/pom.xml 文件")
+            
+        WriteCommandAction.runWriteCommandAction(project, "Remove Module from Modules Pom.xml", null, {
+            try {
+                val rootTag = psiFile.rootTag ?: throw Exception("无法找到 pom.xml 根元素")
+                val modulesTag = rootTag.findFirstSubTag("modules")
+                    ?: throw Exception("在 modules pom.xml 中未找到 modules 标签")
+                    
+                // 查找要删除的模块
+                modulesTag.findSubTags("module").forEach { moduleTag ->
+                    if (moduleTag.value.text == moduleName) {
+                        // 找到了对应的模块，删除它
+                        moduleTag.delete()
+                        logger.info("已从 modules pom.xml 中删除模块 '$moduleName'")
+                    }
+                }
+            } catch (e: Exception) {
+                logger.error("从 modules pom.xml 中删除模块失败", e)
+                throw e
+            }
+        })
+    }
+    
+    /**
+     * 从 ruoyi-admin/pom.xml 中删除依赖
+     */
+    private fun removeFromAdminPom(moduleName: String) {
+        val adminPomFile = findFileInProject("ruoyi-admin/pom.xml")
+            ?: throw Exception("ruoyi-admin/pom.xml 文件未找到")
+            
+        val psiFile = PsiManager.getInstance(project).findFile(adminPomFile) as? XmlFile
+            ?: throw Exception("无法解析 ruoyi-admin/pom.xml 文件")
+            
+        WriteCommandAction.runWriteCommandAction(project, "Remove Dependency from Admin Pom.xml", null, {
+            try {
+                val rootTag = psiFile.rootTag ?: throw Exception("无法找到 pom.xml 根元素")
+                val dependenciesTag = rootTag.findFirstSubTag("dependencies")
+                    ?: throw Exception("在 admin pom.xml 中未找到 dependencies 标签")
+                
+                // 查找要删除的依赖
+                dependenciesTag.findSubTags("dependency").forEach { dependencyTag ->
+                    val artifactIdTag = dependencyTag.findFirstSubTag("artifactId")
+                    if (artifactIdTag?.value?.text == moduleName) {
+                        // 找到了对应的依赖，删除它
+                        dependencyTag.delete()
+                        logger.info("已从 admin pom.xml 中删除模块 '$moduleName' 的依赖")
+                    }
+                }
+            } catch (e: Exception) {
+                logger.error("从 admin pom.xml 中删除依赖失败", e)
+                throw e
+            }
+        })
+    }
+    
+    /**
+     * 删除模块目录
+     */
+    private fun deleteModuleDirectory(moduleName: String) {
+        // 获取当前配置的模块前缀，并移除结尾的连字符（如果有）
+        val prefix = DependencyConfigService.getInstance().modulePrefix.trimEnd('-')
+        
+        val modulesDir = findFileInProject("$prefix-modules") ?: throw Exception("$prefix-modules 目录未找到")
+        val moduleDir = modulesDir.findChild(moduleName) ?: throw Exception("模块 '$moduleName' 目录未找到")
+        
+        WriteCommandAction.runWriteCommandAction(project, "Delete Module Directory", null, {
+            try {
+                moduleDir.delete(this)
+                logger.info("已删除模块 '$moduleName' 的目录")
+            } catch (e: Exception) {
+                logger.error("删除模块目录失败", e)
+                throw e
+            }
+        })
+    }
+    
+    /**
+     * 安排延迟刷新任务，确保Maven项目导入完成后能够正确显示新模块
+     */
+    private fun scheduleDelayedRefresh(project: Project, moduleName: String) {
+        // 获取当前配置的模块前缀，并移除结尾的连字符（如果有）
+        val prefix = DependencyConfigService.getInstance().modulePrefix.trimEnd('-')
+        
+        // 首次延迟1秒刷新
+        AppExecutorUtil.getAppScheduledExecutorService().schedule({
+            ApplicationManager.getApplication().invokeLater {
+                refreshMavenProject(project)
+            }
+        }, 1, TimeUnit.SECONDS)
+        
+        // 再次延迟3秒刷新，确保完成
+        AppExecutorUtil.getAppScheduledExecutorService().schedule({
+            ApplicationManager.getApplication().invokeLater {
+                refreshMavenProject(project)
+                
+                // 特别关注新生成的模块目录
+                val basePath = project.basePath
+                if (basePath != null) {
+                    val modulePath = "$basePath/$prefix-modules/$moduleName"
+                    val moduleDir = LocalFileSystem.getInstance().findFileByPath(modulePath)
+                    if (moduleDir != null) {
+                        // 使用异步方式刷新以提高性能
+                        moduleDir.refresh(true, true)
+                        
+                        // 尝试再次触发Maven刷新
+                        val mavenProjectsManager = MavenProjectsManager.getInstance(project)
+                        val pomFile = moduleDir.findChild("pom.xml")
+                        if (pomFile != null) {
+                            // 确保pom文件已经刷新
+                            pomFile.refresh(true, false)
+                            
+                            if (!mavenProjectsManager.isManagedFile(pomFile)) {
+                                // 添加pom文件到Maven管理
+                                mavenProjectsManager.addManagedFilesOrUnignore(listOf(pomFile))
+                                
+                                // 使用最新的API强制更新Maven项目
+                                mavenProjectsManager.forceUpdateAllProjectsOrFindAllAvailablePomFiles()
+                            }
+                        }
+                    }
+                }
+            }
+        }, 3, TimeUnit.SECONDS)
+    }
+    
+    /**
+     * 刷新Maven项目
+     */
+    private fun refreshMavenProject(project: Project) {
+        try {
+            // 刷新整个项目目录，使用异步方式
+            val basePath = project.basePath
+            if (basePath != null) {
+                val projectDir = LocalFileSystem.getInstance().findFileByPath(basePath)
+                projectDir?.refresh(true, true)
+            }
+            
+            // 使用最新的API触发Maven刷新
+            val mavenProjectsManager = MavenProjectsManager.getInstance(project)
+            
+            // 先查找所有可用的pom文件并添加到管理
+            mavenProjectsManager.forceUpdateAllProjectsOrFindAllAvailablePomFiles()
+        } catch (e: Exception) {
+            logger.error("刷新Maven项目失败: ${e.message}", e)
+            // 忽略异常，不影响主流程
+        }
     }
     
     companion object {
