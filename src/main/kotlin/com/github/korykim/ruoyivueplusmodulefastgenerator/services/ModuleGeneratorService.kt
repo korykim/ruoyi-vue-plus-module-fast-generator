@@ -37,6 +37,16 @@ class ModuleGeneratorService(private val project: Project) {
             // 检查模块名称格式
             val normalizedModuleName = normalizeModuleName(moduleName, modulePrefix)
             
+            logger.info("开始生成模块: $normalizedModuleName")
+            
+            // 检查模块是否已存在
+            val moduleExists = isModuleExists(normalizedModuleName)
+            if (moduleExists) {
+                logger.info("模块 '$normalizedModuleName' 已存在，将尝试更新现有模块")
+            } else {
+                logger.info("模块 '$normalizedModuleName' 不存在，将创建新模块")
+            }
+            
             // 1. 修改根目录 pom.xml
             updateRootPom(normalizedModuleName)
             
@@ -46,8 +56,7 @@ class ModuleGeneratorService(private val project: Project) {
             // 3. 修改 ruoyi-admin/pom.xml
             updateAdminPom(normalizedModuleName)
             
-            // 4. 创建新模块目录和文件
-            @Suppress("UNUSED_VARIABLE")
+            // 4. 创建新模块目录和文件（或重用现有目录）
             val moduleDir = createModuleStructure(normalizedModuleName, dependencyConfigName)
             
             // 5. 刷新项目视图
@@ -56,6 +65,10 @@ class ModuleGeneratorService(private val project: Project) {
             // 6. 显式触发Maven项目导入
             importMavenChanges()
             
+            // 7. 确保新模块的pom.xml被刷新和导入
+            refreshAndImportModulePom(moduleDir)
+            
+            logger.info("模块 '$normalizedModuleName' " + (if (moduleExists) "更新" else "创建") + "成功")
             return true
         } catch (e: Exception) {
             logger.error("生成模块失败: ${e.message}", e)
@@ -97,20 +110,32 @@ class ModuleGeneratorService(private val project: Project) {
                     
                 val dependenciesTag = dependencyManagementTag.findFirstSubTag("dependencies")
                     ?: throw Exception("在 dependencyManagement 中未找到 dependencies 标签")
-                    
-                // 创建新的依赖元素
-                val dependencyXml = """
-                    <dependency>
-                        <groupId>org.dromara</groupId>
-                        <artifactId>$moduleName</artifactId>
-                        <version>${"$"}{revision}</version>
-                    </dependency>
-                """.trimIndent()
                 
-                // 添加到最后一个 dependency 标签后
-                val factory = XmlElementFactory.getInstance(project)
-                val newDependencyTag = factory.createTagFromText(dependencyXml, XMLLanguage.INSTANCE)
-                dependenciesTag.addSubTag(newDependencyTag, false)
+                // 检查依赖是否已存在
+                val dependencyExists = dependenciesTag.findSubTags("dependency").any { dependencyTag ->
+                    val artifactIdTag = dependencyTag.findFirstSubTag("artifactId")
+                    artifactIdTag?.value?.text == moduleName
+                }
+                
+                if (!dependencyExists) {
+                    // 创建新的依赖元素
+                    val dependencyXml = """
+                        <dependency>
+                            <groupId>org.dromara</groupId>
+                            <artifactId>$moduleName</artifactId>
+                            <version>${"$"}{revision}</version>
+                        </dependency>
+                    """.trimIndent()
+                    
+                    // 添加到最后一个 dependency 标签后
+                    val factory = XmlElementFactory.getInstance(project)
+                    val newDependencyTag = factory.createTagFromText(dependencyXml, XMLLanguage.INSTANCE)
+                    dependenciesTag.addSubTag(newDependencyTag, false)
+                    
+                    logger.info("已添加模块 '$moduleName' 的依赖到根 pom.xml")
+                } else {
+                    logger.info("模块 '$moduleName' 的依赖已存在于根 pom.xml 中，无需重复添加")
+                }
             } catch (e: Exception) {
                 logger.error("更新根 pom.xml 失败", e)
                 throw e
@@ -134,11 +159,22 @@ class ModuleGeneratorService(private val project: Project) {
                 val modulesTag = rootTag.findFirstSubTag("modules")
                     ?: throw Exception("在 modules pom.xml 中未找到 modules 标签")
                     
-                // 创建新的模块元素
-                val moduleXml = "<module>$moduleName</module>"
-                val factory = XmlElementFactory.getInstance(project)
-                val newModuleTag = factory.createTagFromText(moduleXml, XMLLanguage.INSTANCE)
-                modulesTag.addSubTag(newModuleTag, false)
+                // 检查模块是否已存在
+                val moduleExists = modulesTag.findSubTags("module").any { moduleTag ->
+                    moduleTag.value.text == moduleName
+                }
+                
+                if (!moduleExists) {
+                    // 创建新的模块元素
+                    val moduleXml = "<module>$moduleName</module>"
+                    val factory = XmlElementFactory.getInstance(project)
+                    val newModuleTag = factory.createTagFromText(moduleXml, XMLLanguage.INSTANCE)
+                    modulesTag.addSubTag(newModuleTag, false)
+                    
+                    logger.info("已添加模块 '$moduleName' 到 modules pom.xml")
+                } else {
+                    logger.info("模块 '$moduleName' 已存在于 modules pom.xml 中，无需重复添加")
+                }
             } catch (e: Exception) {
                 logger.error("更新 modules pom.xml 失败", e)
                 throw e
@@ -161,24 +197,36 @@ class ModuleGeneratorService(private val project: Project) {
                 val rootTag = psiFile.rootTag ?: throw Exception("无法找到 pom.xml 根元素")
                 val dependenciesTag = rootTag.findFirstSubTag("dependencies")
                     ?: throw Exception("在 admin pom.xml 中未找到 dependencies 标签")
+                
+                // 检查依赖是否已存在
+                val dependencyExists = dependenciesTag.findSubTags("dependency").any { dependencyTag ->
+                    val artifactIdTag = dependencyTag.findFirstSubTag("artifactId")
+                    artifactIdTag?.value?.text == moduleName
+                }
+                
+                if (!dependencyExists) {
+                    // 查找版本号
+                    val version = findProjectVersion()
                     
-                // 查找版本号
-                val version = findProjectVersion()
-                
-                // 创建新的依赖元素，显式包含版本号
-                val simpleModuleName = moduleName.substringAfter("ruoyi-")
-                val dependencyXml = """
-                    <!-- ${simpleModuleName}模块  -->
-                    <dependency>
-                        <groupId>org.dromara</groupId>
-                        <artifactId>$moduleName</artifactId>
-                        <version>$version</version>
-                    </dependency>
-                """.trimIndent()
-                
-                val factory = XmlElementFactory.getInstance(project)
-                val newDependencyTag = factory.createTagFromText(dependencyXml, XMLLanguage.INSTANCE)
-                dependenciesTag.addSubTag(newDependencyTag, false)
+                    // 创建新的依赖元素，显式包含版本号
+                    val simpleModuleName = moduleName.substringAfter("ruoyi-")
+                    val dependencyXml = """
+                        <!-- ${simpleModuleName}模块  -->
+                        <dependency>
+                            <groupId>org.dromara</groupId>
+                            <artifactId>$moduleName</artifactId>
+                            <version>$version</version>
+                        </dependency>
+                    """.trimIndent()
+                    
+                    val factory = XmlElementFactory.getInstance(project)
+                    val newDependencyTag = factory.createTagFromText(dependencyXml, XMLLanguage.INSTANCE)
+                    dependenciesTag.addSubTag(newDependencyTag, false)
+                    
+                    logger.info("已添加模块 '$moduleName' 的依赖到 admin pom.xml")
+                } else {
+                    logger.info("模块 '$moduleName' 的依赖已存在于 admin pom.xml 中，无需重复添加")
+                }
             } catch (e: Exception) {
                 logger.error("更新 admin pom.xml 失败", e)
                 throw e
@@ -227,29 +275,94 @@ class ModuleGeneratorService(private val project: Project) {
         val modulesDir = findFileInProject("ruoyi-modules")
             ?: throw Exception("ruoyi-modules 目录未找到")
         
+        // 检查模块目录是否已存在
+        val existingDir = modulesDir.findChild(moduleName)
+        if (existingDir != null && existingDir.isDirectory) {
+            // 模块目录已存在，可以选择重用现有目录或提示错误
+            logger.info("模块目录 '$moduleName' 已存在，正在重用现有目录")
+            
+            // 刷新现有目录以确保获取最新状态
+            existingDir.refresh(true, true)
+            
+            return existingDir
+        }
+        
         var resultDir: VirtualFile? = null    
         
         WriteCommandAction.runWriteCommandAction(project, "Create Module Structure", null, {
             try {
-                val newDir = modulesDir.createChildDirectory(this, moduleName)
+                // 创建新目录前再次检查目录是否存在（可能是在刷新后检测到的）
+                val checkAgain = modulesDir.findChild(moduleName)
+                val newDir = if (checkAgain != null && checkAgain.isDirectory) {
+                    // 如果存在，使用现有目录
+                    checkAgain
+                } else {
+                    // 如果不存在，创建新目录
+                    modulesDir.createChildDirectory(this, moduleName)
+                }
                 
-                // 创建 pom.xml 文件
-                val pomContent = generateModulePomContent(moduleName, dependencyConfigName)
-                val pomFile = newDir.createChildData(this, "pom.xml")
-                VfsUtil.saveText(pomFile, pomContent)
+                // 检查pom.xml是否已存在
+                val existingPomFile = newDir.findChild("pom.xml")
+                if (existingPomFile == null) {
+                    // 创建 pom.xml 文件（如果不存在）
+                    val pomContent = generateModulePomContent(moduleName, dependencyConfigName)
+                    val pomFile = newDir.createChildData(this, "pom.xml")
+                    VfsUtil.saveText(pomFile, pomContent)
+                }
                 
-                // 创建标准 Java 项目结构
-                val srcDir = newDir.createChildDirectory(this, "src")
-                val mainDir = srcDir.createChildDirectory(this, "main")
-                val javaDir = mainDir.createChildDirectory(this, "java")
-                mainDir.createChildDirectory(this, "resources")
+                // 检查src目录是否已存在
+                val existingSrcDir = newDir.findChild("src")
+                val srcDir = if (existingSrcDir != null && existingSrcDir.isDirectory) {
+                    existingSrcDir
+                } else {
+                    newDir.createChildDirectory(this, "src")
+                }
                 
-                // 创建包结构
-                val orgDir = javaDir.createChildDirectory(this, "org")
-                val dromaraDir = orgDir.createChildDirectory(this, "dromara")
-                val moduleNameDir = dromaraDir.createChildDirectory(this, moduleName.replace("-", ""))
+                // 检查main目录是否已存在
+                val existingMainDir = srcDir.findChild("main")
+                val mainDir = if (existingMainDir != null && existingMainDir.isDirectory) {
+                    existingMainDir
+                } else {
+                    srcDir.createChildDirectory(this, "main")
+                }
                 
-                // 创建基本文件
+                // 检查java目录是否已存在
+                val existingJavaDir = mainDir.findChild("java")
+                val javaDir = if (existingJavaDir != null && existingJavaDir.isDirectory) {
+                    existingJavaDir
+                } else {
+                    mainDir.createChildDirectory(this, "java")
+                }
+                
+                // 检查resources目录是否已存在
+                if (mainDir.findChild("resources") == null) {
+                    mainDir.createChildDirectory(this, "resources")
+                }
+                
+                // 检查包结构是否已存在
+                val existingOrgDir = javaDir.findChild("org")
+                val orgDir = if (existingOrgDir != null && existingOrgDir.isDirectory) {
+                    existingOrgDir
+                } else {
+                    javaDir.createChildDirectory(this, "org")
+                }
+                
+                val existingDromaraDir = orgDir.findChild("dromara")
+                val dromaraDir = if (existingDromaraDir != null && existingDromaraDir.isDirectory) {
+                    existingDromaraDir
+                } else {
+                    orgDir.createChildDirectory(this, "dromara")
+                }
+                
+                val moduleNameWithoutDash = moduleName.replace("-", "")
+                val existingModuleNameDir = dromaraDir.findChild(moduleNameWithoutDash)
+                val moduleNameDir = if (existingModuleNameDir != null && existingModuleNameDir.isDirectory) {
+                    existingModuleNameDir
+                } else {
+                    dromaraDir.createChildDirectory(this, moduleNameWithoutDash)
+                }
+                
+                // 创建基本包结构
                 createBasicPackages(moduleNameDir)
                 
                 resultDir = newDir
@@ -268,12 +381,27 @@ class ModuleGeneratorService(private val project: Project) {
     private fun createBasicPackages(baseDir: VirtualFile) {
         WriteCommandAction.runWriteCommandAction(project, "Create Basic Packages", null, {
             try {
-                // 创建常用的包结构
-                baseDir.createChildDirectory(this, "controller")
-                baseDir.createChildDirectory(this, "domain")
-                baseDir.createChildDirectory(this, "mapper")
-                val serviceDir = baseDir.createChildDirectory(this, "service")
-                serviceDir.createChildDirectory(this, "impl")
+                // 创建常用的包结构（先检查是否已存在）
+                if (baseDir.findChild("controller") == null) {
+                    baseDir.createChildDirectory(this, "controller")
+                }
+                if (baseDir.findChild("domain") == null) {
+                    baseDir.createChildDirectory(this, "domain")
+                }
+                if (baseDir.findChild("mapper") == null) {
+                    baseDir.createChildDirectory(this, "mapper")
+                }
+                
+                val existingServiceDir = baseDir.findChild("service")
+                val serviceDir = if (existingServiceDir != null && existingServiceDir.isDirectory) {
+                    existingServiceDir
+                } else {
+                    baseDir.createChildDirectory(this, "service")
+                }
+                
+                if (serviceDir.findChild("impl") == null) {
+                    serviceDir.createChildDirectory(this, "impl")
+                }
             } catch (e: Exception) {
                 logger.error("创建基本包结构失败", e)
                 throw e
@@ -395,6 +523,53 @@ $dependenciesContent
             logger.error("Maven项目导入失败: ${e.message}", e)
             // 忽略异常，不影响主流程
         }
+    }
+    
+    /**
+     * 刷新并导入指定模块的pom.xml
+     * 
+     * @param moduleDir 模块目录
+     */
+    private fun refreshAndImportModulePom(moduleDir: VirtualFile) {
+        try {
+            // 查找模块的pom.xml文件
+            val pomFile = moduleDir.findChild("pom.xml") ?: return
+            
+            // 刷新pom文件 - 使用异步刷新以提高性能
+            pomFile.refresh(true, false)
+            
+            // 获取Maven项目管理器
+            val mavenProjectsManager = MavenProjectsManager.getInstance(project)
+            
+            // 添加pom.xml文件到Maven项目
+            ApplicationManager.getApplication().invokeLater {
+                try {
+                    // 使用非阻塞方式添加pom文件并触发导入
+                    if (!mavenProjectsManager.isManagedFile(pomFile)) {
+                        mavenProjectsManager.addManagedFilesOrUnignore(listOf(pomFile))
+                        
+                        // 强制更新所有项目，使用最新的API
+                        mavenProjectsManager.forceUpdateAllProjectsOrFindAllAvailablePomFiles()
+                        
+                        // 确保模块目录也被刷新
+                        moduleDir.refresh(true, true)
+                    }
+                } catch (e: Exception) {
+                    logger.error("刷新模块pom.xml失败: ${e.message}", e)
+                }
+            }
+        } catch (e: Exception) {
+            logger.error("处理模块pom.xml时出错: ${e.message}", e)
+        }
+    }
+    
+    /**
+     * 检查模块是否已存在
+     */
+    private fun isModuleExists(moduleName: String): Boolean {
+        val modulesDir = findFileInProject("ruoyi-modules") ?: return false
+        val moduleDir = modulesDir.findChild(moduleName)
+        return moduleDir != null && moduleDir.isDirectory
     }
     
     companion object {
