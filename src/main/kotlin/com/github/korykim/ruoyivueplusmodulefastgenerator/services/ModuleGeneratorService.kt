@@ -15,6 +15,7 @@ import com.intellij.lang.xml.XMLLanguage
 import org.jetbrains.idea.maven.project.MavenProjectsManager
 import com.intellij.util.concurrency.AppExecutorUtil
 import java.util.concurrent.TimeUnit
+import java.io.File
 
 
 /**
@@ -147,9 +148,13 @@ class ModuleGeneratorService(private val project: Project) {
             val groupId = findProjectGroupId()
             val currentPrefix = DependencyConfigService.getInstance().modulePrefix
             
+            // 强制刷新当前项目配置信息 - 确保跨项目操作时配置正确
+            DependencyConfigService.getInstance().refreshCurrentProjectConfig(project)
+            
             // 自动更新依赖配置中的groupId和前缀
             if (groupId != "org.dromara" || !currentPrefix.startsWith("ruoyi-")) {
                 try {
+                    // 每次创建模块都确保配置使用当前项目的信息
                     DependencyConfigService.getInstance().updateDependenciesInfo(groupId, currentPrefix)
                     logger.info("已更新依赖配置信息, groupId: $groupId, 前缀: $currentPrefix")
                 } catch (e: Exception) {
@@ -226,11 +231,42 @@ class ModuleGeneratorService(private val project: Project) {
      * @return 标准化后的模块名称
      */
     private fun normalizeModuleName(moduleName: String, modulePrefix: String? = null): String {
-        val prefix = modulePrefix ?: DependencyConfigService.getInstance().modulePrefix
-        var name = moduleName.trim()
-        if (!name.startsWith(prefix)) {
-            name = "$prefix$name"
+        // 获取前缀（优先使用传入的前缀）
+        val configPrefix = DependencyConfigService.getInstance().modulePrefix
+        var prefix = modulePrefix ?: configPrefix
+        
+        // 确保前缀以连字符结尾
+        if (!prefix.endsWith("-")) {
+            prefix += "-"
         }
+        
+        // 处理用户输入的模块名称
+        var name = moduleName.trim()
+        
+        // 如果用户输入已经包含前缀，避免重复添加
+        if (!name.startsWith(prefix)) {
+            // 检查用户输入是否包含连字符，如果已经包含则需要考虑是否是另一种形式的前缀
+            if (name.contains("-")) {
+                // 提取可能的现有前缀
+                val possiblePrefix = name.substringBefore("-") + "-"
+                
+                // 检查现有前缀是否与系统前缀的基础部分相同（忽略大小写）
+                // 例如：用户输入"rycloud-module"，而系统前缀是"RyCloud-"
+                if (possiblePrefix.equals(prefix, ignoreCase = true)) {
+                    // 使用用户输入的名称，但确保前缀部分使用标准格式
+                    val moduleSuffix = name.substringAfter("-")
+                    name = prefix + moduleSuffix
+                } else {
+                    // 现有连字符不是前缀的一部分，添加完整前缀
+                    name = prefix + name
+                }
+            } else {
+                // 没有连字符，直接添加前缀
+                name = prefix + name
+            }
+        }
+        
+        logger.info("模块名称标准化: 输入=$moduleName, 标准化后=$name")
         return name
     }
     
@@ -431,7 +467,13 @@ class ModuleGeneratorService(private val project: Project) {
                     val version = findProjectVersion()
                     
                     // 创建新的依赖元素，显式包含版本号
-                    val simpleModuleName = moduleName.substringAfter(DependencyConfigService.getInstance().modulePrefix.trimEnd('-') + "-")
+                    val prefixWithDash = DependencyConfigService.getInstance().modulePrefix.trimEnd('-') + "-"
+                    val simpleModuleName = if (moduleName.startsWith(prefixWithDash)) {
+                        moduleName.substringAfter(prefixWithDash)
+                    } else {
+                        // 如果模块名不以前缀开头，直接使用
+                        moduleName
+                    }
                     val dependencyXml = """
                         <!-- ${simpleModuleName}模块  -->
                         <dependency>
@@ -579,8 +621,18 @@ class ModuleGeneratorService(private val project: Project) {
                     }
                 }
                 
-                // 使用模块名（去掉连字符）作为包名的最后一部分
-                val moduleNameWithoutDash = moduleName.replace("-", "")
+                // 使用模块名（去掉连字符和前缀）作为包名的最后一部分
+                val moduleNameWithoutPrefix = if (moduleName.startsWith("$prefix-")) {
+                    moduleName.substringAfter("$prefix-")
+                } else {
+                    // 如果模块名不以前缀开头，则直接使用模块名
+                    moduleName
+                }
+                // 去掉模块名称中的连字符
+                val moduleNameWithoutDash = moduleNameWithoutPrefix.replace("-", "")
+                
+                logger.info("创建包结构: $groupId.$moduleNameWithoutDash")
+                
                 val existingModuleNameDir = currentDir.findChild(moduleNameWithoutDash)
                 val moduleNameDir = if (existingModuleNameDir != null && existingModuleNameDir.isDirectory) {
                     existingModuleNameDir
@@ -678,7 +730,15 @@ class ModuleGeneratorService(private val project: Project) {
      */
     private fun generateModulePomContent(moduleName: String, dependencyConfigName: String? = null): String {
         val prefix = DependencyConfigService.getInstance().modulePrefix.trimEnd('-')
-        val simpleModuleName = moduleName.substringAfter("$prefix-")
+        val prefixWithDash = "$prefix-"
+        
+        // 提取实际的模块名称（去掉前缀部分）
+        val simpleModuleName = if (moduleName.startsWith(prefixWithDash)) {
+            moduleName.substringAfter(prefixWithDash)
+        } else {
+            // 如果模块名不以前缀开头，则直接使用
+            moduleName
+        }
         
         // 获取项目版本号
         val version = try {
@@ -692,12 +752,20 @@ class ModuleGeneratorService(private val project: Project) {
         
         // 获取依赖配置内容
         val dependenciesContent = if (dependencyConfigName != null) {
-            DependencyConfigService.getInstance().getDependenciesContent(dependencyConfigName)
+            DependencyConfigService.getInstance().getDependenciesContent(dependencyConfigName) ?: getDefaultDependencies(groupId, prefix)
         } else {
-            // 如果没有指定配置或者配置不存在，使用默认配置
-            DependencyConfigService.getInstance().getConfigNames().firstOrNull()?.let {
-                DependencyConfigService.getInstance().getDependenciesContent(it)
-            } ?: getDefaultDependencies(groupId, prefix)
+            // 如果没有指定配置或者配置不存在，尝试使用第一个配置
+            val firstConfigName = DependencyConfigService.getInstance().getConfigNames().firstOrNull()
+            if (firstConfigName != null) {
+                val content = DependencyConfigService.getInstance().getDependenciesContent(firstConfigName)
+                if (content != null) {
+                    content
+                } else {
+                    getDefaultDependencies(groupId, prefix)
+                }
+            } else {
+                getDefaultDependencies(groupId, prefix)
+            }
         }
         
         return """
@@ -856,6 +924,15 @@ $dependenciesContent
                 return false
             }
             
+            // 获取并记录要删除的模块路径
+            val prefix = DependencyConfigService.getInstance().modulePrefix.trimEnd('-')
+            val modulesDir = findFileInProject("$prefix-modules") ?: throw Exception("$prefix-modules 目录未找到")
+            val moduleDir = modulesDir.findChild(moduleName) ?: throw Exception("模块 '$moduleName' 目录未找到")
+            val modulePath = moduleDir.path
+            
+            // 提前刷新项目
+            refreshProjectView()
+            
             // 1. 从根目录 pom.xml 中删除依赖
             removeFromRootPom(moduleName)
             
@@ -865,14 +942,26 @@ $dependenciesContent
             // 3. 从 ruoyi-admin/pom.xml 中删除依赖
             removeFromAdminPom(moduleName)
             
-            // 4. 删除模块目录
-            deleteModuleDirectory(moduleName)
-            
-            // 5. 刷新项目视图
+            // 4. 刷新项目，确保POM修改保存
             refreshProjectView()
             
-            // 6. 显式触发Maven项目导入
+            // 5. 进行预删除检查，确保模块目录已准备好被删除
+            preDeleteCheck(modulePath)
+            
+            // 6. 删除模块目录
+            deleteModuleDirectory(moduleName)
+            
+            // 7. 删除后立即进行强制刷新，清理可能的无效引用
+            forceRefreshAfterDelete(modulePath, modulesDir)
+            
+            // 8. 显式触发Maven项目导入
             importMavenChanges()
+            
+            // 9. 延迟刷新确保IDE虚拟文件系统状态更新
+            scheduleDelayedRefresh(project, moduleName, true)
+            
+            // 10. 增加额外延迟刷新，彻底清理无效引用
+            scheduleAdditionalRefresh()
             
             logger.info("模块 '$moduleName' 删除成功")
             return true
@@ -880,6 +969,152 @@ $dependenciesContent
             logger.error("删除模块失败: ${e.message}", e)
             return false
         }
+    }
+    
+    /**
+     * 预删除检查，确保模块目录已准备好被删除
+     */
+    private fun preDeleteCheck(modulePath: String) {
+        try {
+            val moduleDir = LocalFileSystem.getInstance().findFileByPath(modulePath)
+            if (moduleDir != null) {
+                // 强制刷新目录
+                moduleDir.refresh(true, true)
+                
+                // 尝试预先删除可能导致问题的文件（如.iml文件）
+                WriteCommandAction.runWriteCommandAction(project, "Pre-Delete Check", null, {
+                    try {
+                        moduleDir.children.filter { it.name.endsWith(".iml") }.forEach {
+                            it.delete(this)
+                        }
+                    } catch (e: Exception) {
+                        logger.warn("预删除检查中清理.iml文件失败，但这不是致命错误: ${e.message}")
+                    }
+                })
+            }
+        } catch (e: Exception) {
+            logger.warn("预删除检查失败，但这不是致命错误: ${e.message}")
+        }
+    }
+    
+    /**
+     * 强制刷新删除后的状态
+     */
+    private fun forceRefreshAfterDelete(deletedPath: String, parentDir: VirtualFile) {
+        try {
+            // 立即刷新父目录
+            parentDir.refresh(true, true)
+            
+            // 延迟执行额外刷新
+            ApplicationManager.getApplication().invokeLater {
+                try {
+                    // 再次刷新父目录
+                    if (parentDir.isValid) {
+                        parentDir.refresh(true, true)
+                    }
+                    
+                    // 检查并清理可能存在的无效引用
+                    val checkDeleted = try {
+                        LocalFileSystem.getInstance().findFileByPath(deletedPath)
+                    } catch (e: Exception) {
+                        logger.warn("获取已删除路径时出错，路径可能已完全失效: ${e.message}")
+                        null
+                    }
+                    
+                    if (checkDeleted != null) {
+                        try {
+                            if (checkDeleted.isValid && checkDeleted.exists()) {
+                                logger.warn("模块目录可能未被完全删除，尝试强制刷新")
+                                checkDeleted.refresh(true, true)
+                            } else if (checkDeleted.isValid) {
+                                // 文件不存在但引用仍然存在，尝试清理
+                                logger.warn("模块目录已被删除但引用仍然存在，尝试清理引用")
+                                
+                                // 使用反射尝试清理VFS缓存
+                                try {
+                                    val fsClass = Class.forName("com.intellij.openapi.vfs.newvfs.impl.VirtualFileSystemEntry")
+                                    val invalidateMethod = fsClass.getDeclaredMethod("invalidate")
+                                    invalidateMethod.isAccessible = true
+                                    invalidateMethod.invoke(checkDeleted)
+                                    logger.info("成功调用invalidate方法清理无效引用")
+                                } catch (e: Exception) {
+                                    // 静默处理，因为这是尝试性操作
+                                    logger.debug("清理无效引用失败，但这不是致命错误: ${e.message}")
+                                }
+                            }
+                        } catch (e: Exception) {
+                            logger.warn("处理已删除引用时出错: ${e.message}")
+                        }
+                    }
+                    
+                    // 刷新整个项目
+                    refreshProjectView()
+                    
+                    // 强制一次GC尝试清理无效引用
+                    System.gc()
+                } catch (e: Exception) {
+                    logger.warn("强制刷新删除后状态失败，但这不是致命错误: ${e.message}")
+                }
+            }
+        } catch (e: Exception) {
+            logger.warn("强制刷新删除后状态失败，但这不是致命错误: ${e.message}")
+        }
+    }
+    
+    /**
+     * 安排额外的延迟刷新，确保清理所有无效引用
+     */
+    private fun scheduleAdditionalRefresh() {
+        // 延迟5秒进行最终刷新
+        AppExecutorUtil.getAppScheduledExecutorService().schedule({
+            ApplicationManager.getApplication().invokeLater {
+                try {
+                    // 刷新整个项目
+                    val basePath = project.basePath
+                    if (basePath != null) {
+                        val projectDir = LocalFileSystem.getInstance().findFileByPath(basePath)
+                        projectDir?.refresh(true, true)
+                    }
+                    
+                    // 使用反射尝试调用VFS缓存刷新
+                    try {
+                        val vfsClass = Class.forName("com.intellij.openapi.vfs.newvfs.persistent.PersistentFS")
+                        val getInstance = vfsClass.getDeclaredMethod("getInstance")
+                        val instance = getInstance.invoke(null)
+                        val syncMethod = vfsClass.getDeclaredMethod("syncRefresh")
+                        syncMethod.invoke(instance)
+                        logger.info("成功调用PersistentFS.syncRefresh方法进行VFS刷新")
+                    } catch (e: Exception) {
+                        // 静默处理，因为这是尝试性操作
+                    }
+                    
+                    // 清理无效文件引用
+                    InvalidFilesCleaner.clearInvalidFiles(project)
+                    
+                    // 刷新Maven项目
+                    refreshMavenProject(project)
+                } catch (e: Exception) {
+                    logger.warn("额外延迟刷新失败，但这不是致命错误: ${e.message}")
+                }
+            }
+        }, 5, TimeUnit.SECONDS)
+        
+        // 延迟10秒再次刷新，确保所有操作完成
+        AppExecutorUtil.getAppScheduledExecutorService().schedule({
+            ApplicationManager.getApplication().invokeLater {
+                try {
+                    refreshMavenProject(project)
+                    
+                    // 再次清理无效文件引用
+                    InvalidFilesCleaner.clearInvalidFiles(project)
+                    
+                    // 强制进行一次GC，帮助释放资源
+                    System.gc()
+                } catch (e: Exception) {
+                    // 静默处理，因为这是最后的尝试性操作
+                }
+            }
+        }, 10, TimeUnit.SECONDS)
     }
     
     /**
@@ -1020,19 +1255,128 @@ $dependenciesContent
         
         WriteCommandAction.runWriteCommandAction(project, "Delete Module Directory", null, {
             try {
-                moduleDir.delete(this)
-                logger.info("已删除模块 '$moduleName' 的目录")
+                // 记录模块路径，用于后续验证
+                val modulePath = moduleDir.path
+                
+                // 先刷新模块目录，确保状态正确
+                try {
+                    moduleDir.refresh(true, true)
+                } catch (e: Exception) {
+                    logger.warn("刷新模块目录失败，但继续执行删除: ${e.message}")
+                }
+                
+                // 先尝试删除目录中的所有内容，然后再删除目录本身
+                // 这样可以减少因为目录非空导致的删除失败问题
+                try {
+                    val deleteResult = deleteDirectoryContents(moduleDir)
+                    
+                    if (deleteResult) {
+                        // 如果内容清理成功，尝试删除目录本身
+                        try {
+                            moduleDir.delete(this)
+                            logger.info("已删除模块 '$moduleName' 的目录")
+                        } catch (e: Exception) {
+                            logger.error("删除模块目录失败: ${e.message}", e)
+                            throw e
+                        }
+                    } else {
+                        // 如果内容清理失败，直接尝试删除整个目录
+                        try {
+                            moduleDir.delete(this)
+                            logger.info("已直接删除模块 '$moduleName' 的目录")
+                        } catch (e: Exception) {
+                            logger.error("直接删除模块目录失败: ${e.message}", e)
+                            throw e
+                        }
+                    }
+                } catch (e: Exception) {
+                    logger.error("删除模块目录内容失败: ${e.message}", e)
+                    
+                    // 如果删除模块目录失败，尝试备用删除方法
+                    try {
+                        logger.info("尝试备用删除方法 - 使用java.io.File")
+                        val fileObj = File(modulePath)
+                        if (fileObj.exists()) {
+                            deleteRecursively(fileObj)
+                            logger.info("使用备用方法删除成功")
+                        }
+                    } catch (e2: Exception) {
+                        logger.error("备用删除方法也失败: ${e2.message}", e2)
+                        throw e
+                    }
+                }
+                
+                // 立即刷新模块所在目录，确保虚拟文件系统状态更新
+                try {
+                    modulesDir.refresh(true, true)
+                } catch (e: Exception) {
+                    logger.warn("刷新父目录失败，但不中断流程: ${e.message}")
+                }
+                
+                // 验证目录确实被删除
+                try {
+                    val checkDeleted = LocalFileSystem.getInstance().findFileByPath(modulePath)
+                    if (checkDeleted != null && checkDeleted.exists()) {
+                        logger.warn("目录似乎没有被完全删除，可能需要手动操作")
+                    }
+                } catch (e: Exception) {
+                    logger.warn("验证删除状态失败，但这不是关键步骤: ${e.message}")
+                }
             } catch (e: Exception) {
-                logger.error("删除模块目录失败", e)
+                logger.error("删除模块目录时发生异常: ${e.message}", e)
                 throw e
             }
         })
     }
     
     /**
-     * 安排延迟刷新任务，确保Maven项目导入完成后能够正确显示新模块
+     * 使用Java原生方法递归删除文件夹
+     * 当IntelliJ的VFS API失败时的备用方法
      */
-    private fun scheduleDelayedRefresh(project: Project, moduleName: String) {
+    private fun deleteRecursively(file: File): Boolean {
+        if (file.isDirectory) {
+            file.listFiles()?.forEach { child ->
+                deleteRecursively(child)
+            }
+        }
+        return file.delete()
+    }
+    
+    /**
+     * 递归删除目录内容，但保留目录本身
+     * 
+     * @param dir 要清空的目录
+     * @return 是否成功清空目录内容
+     */
+    private fun deleteDirectoryContents(dir: VirtualFile): Boolean {
+        try {
+            // 先处理所有子目录和文件
+            for (child in dir.children) {
+                if (child.isDirectory) {
+                    // 递归删除子目录内容
+                    deleteDirectoryContents(child)
+                    // 删除空目录
+                    child.delete(this)
+                } else {
+                    // 删除文件
+                    child.delete(this)
+                }
+            }
+            return true
+        } catch (e: Exception) {
+            logger.warn("删除目录内容失败: ${e.message}")
+            return false
+        }
+    }
+    
+    /**
+     * 安排延迟刷新任务，确保Maven项目导入完成后能够正确显示新模块
+     * 
+     * @param project 项目实例
+     * @param moduleName 模块名称 
+     * @param isDelete 是否为删除操作，默认为false(创建/更新操作)
+     */
+    private fun scheduleDelayedRefresh(project: Project, moduleName: String, isDelete: Boolean = false) {
         // 获取当前配置的模块前缀，并移除结尾的连字符（如果有）
         val prefix = DependencyConfigService.getInstance().modulePrefix.trimEnd('-')
         
@@ -1040,6 +1384,50 @@ $dependenciesContent
         AppExecutorUtil.getAppScheduledExecutorService().schedule({
             ApplicationManager.getApplication().invokeLater {
                 refreshMavenProject(project)
+                
+                // 对于删除操作，需要特别清理相关状态
+                if (isDelete) {
+                    try {
+                        val basePath = project.basePath
+                        if (basePath != null) {
+                            // 清理可能存在的无效引用路径
+                            val modulePath = "$basePath/$prefix-modules/$moduleName"
+                            
+                            try {
+                                val checkFile = LocalFileSystem.getInstance().findFileByPath(modulePath)
+                                if (checkFile != null) {
+                                    // 如果路径已不存在但引用仍然存在，强制刷新
+                                    if (checkFile.isValid && !checkFile.exists()) {
+                                        logger.warn("发现删除模块的无效引用，尝试清理")
+                                        // 使用反射尝试清理VFS缓存
+                                        try {
+                                            val fsClass = Class.forName("com.intellij.openapi.vfs.newvfs.impl.VirtualFileSystemEntry")
+                                            val invalidateMethod = fsClass.getDeclaredMethod("invalidate")
+                                            invalidateMethod.isAccessible = true
+                                            invalidateMethod.invoke(checkFile)
+                                        } catch (e: Exception) {
+                                            // 静默处理反射异常
+                                            logger.debug("通过反射清理无效引用失败: ${e.message}")
+                                        }
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                logger.warn("检查删除的模块路径时出错: ${e.message}")
+                            }
+                            
+                            // 强制刷新modules目录
+                            val modulesPath = "$basePath/$prefix-modules"
+                            try {
+                                val modulesDir = LocalFileSystem.getInstance().findFileByPath(modulesPath)
+                                modulesDir?.refresh(true, true)
+                            } catch (e: Exception) {
+                                logger.warn("刷新modules目录时出错: ${e.message}")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        logger.warn("删除操作中额外刷新失败，但不中断流程: ${e.message}")
+                    }
+                }
             }
         }, 1, TimeUnit.SECONDS)
         
@@ -1048,30 +1436,56 @@ $dependenciesContent
             ApplicationManager.getApplication().invokeLater {
                 refreshMavenProject(project)
                 
-                // 特别关注新生成的模块目录
-                val basePath = project.basePath
-                if (basePath != null) {
-                    val modulePath = "$basePath/$prefix-modules/$moduleName"
-                    val moduleDir = LocalFileSystem.getInstance().findFileByPath(modulePath)
-                    if (moduleDir != null) {
-                        // 使用异步方式刷新以提高性能
-                        moduleDir.refresh(true, true)
-                        
-                        // 尝试再次触发Maven刷新
-                        val mavenProjectsManager = MavenProjectsManager.getInstance(project)
-                        val pomFile = moduleDir.findChild("pom.xml")
-                        if (pomFile != null) {
-                            // 确保pom文件已经刷新
-                            pomFile.refresh(true, false)
+                // 只有在创建/更新模式下才处理特定模块目录
+                if (!isDelete) {
+                    // 特别关注新生成的模块目录
+                    val basePath = project.basePath
+                    if (basePath != null) {
+                        val modulePath = "$basePath/$prefix-modules/$moduleName"
+                        val moduleDir = LocalFileSystem.getInstance().findFileByPath(modulePath)
+                        if (moduleDir != null) {
+                            // 使用异步方式刷新以提高性能
+                            moduleDir.refresh(true, true)
                             
-                            if (!mavenProjectsManager.isManagedFile(pomFile)) {
-                                // 添加pom文件到Maven管理
-                                mavenProjectsManager.addManagedFilesOrUnignore(listOf(pomFile))
+                            // 尝试再次触发Maven刷新
+                            val mavenProjectsManager = MavenProjectsManager.getInstance(project)
+                            val pomFile = moduleDir.findChild("pom.xml")
+                            if (pomFile != null) {
+                                // 确保pom文件已经刷新
+                                pomFile.refresh(true, false)
                                 
-                                // 使用最新的API强制更新Maven项目
-                                mavenProjectsManager.forceUpdateAllProjectsOrFindAllAvailablePomFiles()
+                                if (!mavenProjectsManager.isManagedFile(pomFile)) {
+                                    // 添加pom文件到Maven管理
+                                    mavenProjectsManager.addManagedFilesOrUnignore(listOf(pomFile))
+                                    
+                                    // 使用最新的API强制更新Maven项目
+                                    mavenProjectsManager.forceUpdateAllProjectsOrFindAllAvailablePomFiles()
+                                }
                             }
                         }
+                    }
+                } else {
+                    // 在删除模式下，强制清理无效的Maven引用
+                    try {
+                        // 主动触发Maven重新扫描
+                        val mavenProjectsManager = MavenProjectsManager.getInstance(project)
+                        mavenProjectsManager.forceUpdateAllProjectsOrFindAllAvailablePomFiles()
+                        
+                        // 主动触发项目重载
+                        val basePath = project.basePath
+                        if (basePath != null) {
+                            try {
+                                val projectDir = LocalFileSystem.getInstance().findFileByPath(basePath)
+                                projectDir?.refresh(true, true)
+                            } catch (e: Exception) {
+                                logger.warn("刷新项目根目录时出错: ${e.message}")
+                            }
+                        }
+                        
+                        // 主动尝试清理VFS缓存
+                        InvalidFilesCleaner.clearInvalidFiles(project)
+                    } catch (e: Exception) {
+                        logger.warn("删除模式下Maven刷新失败，但不中断流程: ${e.message}")
                     }
                 }
             }
@@ -1088,6 +1502,20 @@ $dependenciesContent
             if (basePath != null) {
                 val projectDir = LocalFileSystem.getInstance().findFileByPath(basePath)
                 projectDir?.refresh(true, true)
+                
+                // 获取当前配置的模块前缀
+                val prefix = DependencyConfigService.getInstance().modulePrefix.trimEnd('-')
+                
+                // 特别刷新modules目录，因为它是模块变更的主要位置
+                val modulesPath = "$basePath/$prefix-modules"
+                val modulesDir = LocalFileSystem.getInstance().findFileByPath(modulesPath)
+                modulesDir?.refresh(true, true)
+                
+                // 尝试刷新其他重要目录
+                val adminDirName = findAdminDirName()
+                val adminPath = "$basePath/$adminDirName"
+                val adminDir = LocalFileSystem.getInstance().findFileByPath(adminPath)
+                adminDir?.refresh(true, true)
             }
             
             // 使用最新的API触发Maven刷新
@@ -1095,103 +1523,255 @@ $dependenciesContent
             
             // 先查找所有可用的pom文件并添加到管理
             mavenProjectsManager.forceUpdateAllProjectsOrFindAllAvailablePomFiles()
+            
+            // 尝试调用其他可能有用的刷新方法
+            try {
+                // 请求项目同步
+                invokeProjectSync(project)
+            } catch (e: Exception) {
+                logger.warn("尝试执行项目同步时出错，但不影响主流程: ${e.message}")
+            }
         } catch (e: Exception) {
             logger.error("刷新Maven项目失败: ${e.message}", e)
             // 忽略异常，不影响主流程
         }
     }
     
+    /**
+     * 尝试调用项目同步方法
+     * 这是一个尝试性方法，用于通过反射调用一些可能有助于刷新项目的API
+     */
+    private fun invokeProjectSync(project: Project) {
+        try {
+            // 尝试调用MavenProjectsManager的同步方法
+            val mavenProjectsManager = MavenProjectsManager.getInstance(project)
+            
+            // 使用反射尝试调用 scheduleForceReimport 方法，该方法在某些版本可用
+            try {
+                val method = mavenProjectsManager.javaClass.getMethod("scheduleForceReimport")
+                method.invoke(mavenProjectsManager)
+                logger.info("成功调用scheduleForceReimport方法")
+            } catch (e: Exception) {
+                // 静默处理，因为这是可选尝试
+            }
+            
+            // 使用反射尝试调用 scheduleUpdateAll 方法，该方法在某些版本可用
+            try {
+                val method = mavenProjectsManager.javaClass.getMethod("scheduleUpdateAll")
+                method.invoke(mavenProjectsManager)
+                logger.info("成功调用scheduleUpdateAll方法")
+            } catch (e: Exception) {
+                // 静默处理，因为这是可选尝试
+            }
+        } catch (e: Exception) {
+            // 静默处理所有异常，因为这只是额外的尝试性操作
+        }
+    }
+    
     companion object {
         /**
+         * 无效文件清理器，用于清理IDE中的无效文件引用
+         */
+        private object InvalidFilesCleaner {
+            private val logger = logger<ModuleGeneratorService>()
+            
+            /**
+             * 清理项目中的无效文件引用
+             */
+            fun clearInvalidFiles(project: Project) {
+                try {
+                    // 1. 尝试通过反射访问并调用VirtualFileManager的cleanupForNextTest方法
+                    tryCleanupVirtualFileManager()
+                    
+                    // 2. 尝试通过反射访问并清理FileManagerImpl中的myVirtualFilePointers缓存
+                    tryCleanupFileManagerImpl(project)
+                    
+                    // 3. 尝试清理LocalFileSystem中的myRootsCache
+                    tryCleanupLocalFileSystem()
+                    
+                    // 4. 强制刷新整个项目
+                    val basePath = project.basePath
+                    if (basePath != null) {
+                        val projectDir = LocalFileSystem.getInstance().findFileByPath(basePath)
+                        projectDir?.refresh(true, true)
+                    }
+                } catch (e: Exception) {
+                    logger.warn("清理无效文件引用时出错，但这不影响主要功能: ${e.message}")
+                }
+            }
+            
+            /**
+             * 尝试清理VirtualFileManager
+             */
+            private fun tryCleanupVirtualFileManager() {
+                try {
+                    val vfmClass = Class.forName("com.intellij.openapi.vfs.impl.VirtualFileManagerImpl")
+                    val getInstance = Class.forName("com.intellij.openapi.vfs.VirtualFileManager").getMethod("getInstance")
+                    val vfm = getInstance.invoke(null)
+                    
+                    // 尝试调用cleanupForNextTest方法
+                    val cleanupMethod = vfmClass.getDeclaredMethod("cleanupForNextTest")
+                    cleanupMethod.isAccessible = true
+                    cleanupMethod.invoke(vfm)
+                    logger.info("成功调用VirtualFileManagerImpl.cleanupForNextTest方法")
+                } catch (e: Exception) {
+                    // 静默处理，因为这是尝试性操作
+                }
+            }
+            
+            /**
+             * 尝试清理FileManagerImpl
+             */
+            private fun tryCleanupFileManagerImpl(project: Project) {
+                try {
+                    // 获取PsiManager实例
+                    val psiManager = PsiManager.getInstance(project)
+                    
+                    // 获取FileManagerImpl实例
+                    val fileManagerField = psiManager.javaClass.getDeclaredField("myFileManager")
+                    fileManagerField.isAccessible = true
+                    val fileManager = fileManagerField.get(psiManager)
+                    
+                    // 清理myVirtualFilePointers缓存
+                    val pointersMapField = fileManager.javaClass.getDeclaredField("myVirtualFilePointers")
+                    pointersMapField.isAccessible = true
+                    val pointersMap = pointersMapField.get(fileManager)
+                    
+                    // 如果是Map类型，尝试清理
+                    if (pointersMap is MutableMap<*, *>) {
+                        val mapSize = pointersMap.size
+                        pointersMap.clear()
+                        logger.info("已清理FileManagerImpl.myVirtualFilePointers缓存，原大小: $mapSize")
+                    }
+                } catch (e: Exception) {
+                    // 静默处理，因为这是尝试性操作
+                }
+            }
+            
+            /**
+             * 尝试清理LocalFileSystem
+             */
+            private fun tryCleanupLocalFileSystem() {
+                try {
+                    val localFileSystem = LocalFileSystem.getInstance()
+                    
+                    // 尝试访问并清理myRootsCache字段
+                    val rootsCacheField = localFileSystem.javaClass.getDeclaredField("myRootsCache")
+                    rootsCacheField.isAccessible = true
+                    val rootsCache = rootsCacheField.get(localFileSystem)
+                    
+                    // 如果是Map类型，尝试清理
+                    if (rootsCache is MutableMap<*, *>) {
+                        val cacheSize = rootsCache.size
+                        rootsCache.clear()
+                        logger.info("已清理LocalFileSystem.myRootsCache，原大小: $cacheSize")
+                    }
+                } catch (e: Exception) {
+                    // 静默处理，因为这是尝试性操作
+                }
+            }
+        }
+        
+        /**
          * 默认依赖内容，当没有配置或配置失效时使用
+         * 使用当前项目检测到的groupId和prefix，确保跨项目使用时依赖配置正确
          */
         fun getDefaultDependencies(groupId: String = "org.dromara", prefix: String = "ruoyi-"): String {
+            // 从DependencyConfigService获取最新的项目groupId和prefix
+            // 这样即使传入的参数是默认值，也会使用当前项目的实际值
+            val configService = DependencyConfigService.getInstance()
+            val projectInfo = configService.getDetectedProjectInfo()
+            
+            // 如果能获取到当前项目信息，则优先使用，否则使用传入的参数
+            val actualGroupId = projectInfo?.first ?: groupId
+            val actualPrefix = projectInfo?.second ?: prefix
+            
             return """
  
             <!-- 通用工具-->
             <dependency>
-                <groupId>$groupId</groupId>
-                <artifactId>${prefix}common-core</artifactId>
+                <groupId>$actualGroupId</groupId>
+                <artifactId>${actualPrefix}common-core</artifactId>
             </dependency>
 
             <dependency>
-                <groupId>$groupId</groupId>
-                <artifactId>${prefix}common-doc</artifactId>
+                <groupId>$actualGroupId</groupId>
+                <artifactId>${actualPrefix}common-doc</artifactId>
             </dependency>
 
             <dependency>
-                <groupId>$groupId</groupId>
-                <artifactId>${prefix}common-sms</artifactId>
+                <groupId>$actualGroupId</groupId>
+                <artifactId>${actualPrefix}common-sms</artifactId>
             </dependency>
 
             <dependency>
-                <groupId>$groupId</groupId>
-                <artifactId>${prefix}common-mail</artifactId>
+                <groupId>$actualGroupId</groupId>
+                <artifactId>${actualPrefix}common-mail</artifactId>
             </dependency>
 
             <dependency>
-                <groupId>$groupId</groupId>
-                <artifactId>${prefix}common-redis</artifactId>
+                <groupId>$actualGroupId</groupId>
+                <artifactId>${actualPrefix}common-redis</artifactId>
             </dependency>
 
             <dependency>
-                <groupId>$groupId</groupId>
-                <artifactId>${prefix}common-idempotent</artifactId>
+                <groupId>$actualGroupId</groupId>
+                <artifactId>${actualPrefix}common-idempotent</artifactId>
             </dependency>
 
             <dependency>
-                <groupId>$groupId</groupId>
-                <artifactId>${prefix}common-mybatis</artifactId>
+                <groupId>$actualGroupId</groupId>
+                <artifactId>${actualPrefix}common-mybatis</artifactId>
             </dependency>
 
             <dependency>
-                <groupId>$groupId</groupId>
-                <artifactId>${prefix}common-log</artifactId>
+                <groupId>$actualGroupId</groupId>
+                <artifactId>${actualPrefix}common-log</artifactId>
             </dependency>
 
             <dependency>
-                <groupId>$groupId</groupId>
-                <artifactId>${prefix}common-excel</artifactId>
+                <groupId>$actualGroupId</groupId>
+                <artifactId>${actualPrefix}common-excel</artifactId>
             </dependency>
 
             <dependency>
-                <groupId>$groupId</groupId>
-                <artifactId>${prefix}common-security</artifactId>
+                <groupId>$actualGroupId</groupId>
+                <artifactId>${actualPrefix}common-security</artifactId>
             </dependency>
 
             <dependency>
-                <groupId>$groupId</groupId>
-                <artifactId>${prefix}common-web</artifactId>
+                <groupId>$actualGroupId</groupId>
+                <artifactId>${actualPrefix}common-web</artifactId>
             </dependency>
 
             <dependency>
-                <groupId>$groupId</groupId>
-                <artifactId>${prefix}common-ratelimiter</artifactId>
+                <groupId>$actualGroupId</groupId>
+                <artifactId>${actualPrefix}common-ratelimiter</artifactId>
             </dependency>
 
             <dependency>
-                <groupId>$groupId</groupId>
-                <artifactId>${prefix}common-translation</artifactId>
+                <groupId>$actualGroupId</groupId>
+                <artifactId>${actualPrefix}common-translation</artifactId>
             </dependency>
 
             <dependency>
-                <groupId>$groupId</groupId>
-                <artifactId>${prefix}common-sensitive</artifactId>
+                <groupId>$actualGroupId</groupId>
+                <artifactId>${actualPrefix}common-sensitive</artifactId>
             </dependency>
 
             <dependency>
-                <groupId>$groupId</groupId>
-                <artifactId>${prefix}common-encrypt</artifactId>
+                <groupId>$actualGroupId</groupId>
+                <artifactId>${actualPrefix}common-encrypt</artifactId>
             </dependency>
 
             <dependency>
-                <groupId>$groupId</groupId>
-                <artifactId>${prefix}common-tenant</artifactId>
+                <groupId>$actualGroupId</groupId>
+                <artifactId>${actualPrefix}common-tenant</artifactId>
             </dependency>
 
             <dependency>
-                <groupId>$groupId</groupId>
-                <artifactId>${prefix}common-websocket</artifactId>
+                <groupId>$actualGroupId</groupId>
+                <artifactId>${actualPrefix}common-websocket</artifactId>
             </dependency>
  
             """

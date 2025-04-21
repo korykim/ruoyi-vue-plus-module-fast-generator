@@ -37,6 +37,8 @@
     ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
+    <depends>org.jetbrains.idea.maven</depends>
+    <depends>com.intellij.java</depends>
 
     <resource-bundle>messages.MyBundle</resource-bundle>
 
@@ -74,6 +76,9 @@
                 description="Delete the generated module">
             <!-- 注意：不需要覆盖文本，因为操作类会动态设置文本 -->
             <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+            <!-- 添加到其他常用的上下文菜单组 -->
+            <add-to-group group-id="ProjectViewPopupMenuModifyGroup" anchor="last"/>
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
         </action>
     </actions>
 </idea-plugin>
